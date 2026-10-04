@@ -1,0 +1,27 @@
+{
+  "name": "dom_valma_11x8",
+  "snow_kpa": 2.0,
+  "storeys": 1,
+  "plan": {"length": 11.0, "width": 8.0},
+  "wall_height": 2.7,
+  "stud_spacing": 600,
+  "ext_stud": "38x184",
+  "sheathed": true,
+  "floor": {"direction": "y", "spacing": 400, "subfloor_material": "plywood"},
+  "roof": {"type": "hip", "slope": "1:2", "rafter_spacing": 600,
+           "overhang_eave": 0.6, "attic": "cold"},
+  "layers": {"wall_sheathing_ext": true, "wall_insulation": true,
+             "vapour_barrier": true, "wall_sheathing_int": true,
+             "ceiling": true, "attic_insulation": true, "attic_insulation_mm": 300},
+  "interior_walls": [
+    {"axis": "x", "pos": 4.0, "bearing": true, "spacing": 400, "stud": "38x140",
+     "openings": [{"u": 2.0, "width": 0.9, "height": 2.05, "type": "door"}]}
+  ],
+  "openings": [
+    {"wall": "S", "u": 1.5, "width": 1.5, "height": 1.5, "sill": 0.9},
+    {"wall": "S", "u": 5.0, "width": 1.5, "height": 1.5, "sill": 0.9},
+    {"wall": "S", "u": 8.5, "width": 1.0, "height": 2.1, "sill": 0.0, "type": "door"},
+    {"wall": "N", "u": 3.0, "width": 1.2, "height": 1.5, "sill": 0.9},
+    {"wall": "N", "u": 7.0, "width": 1.2, "height": 1.5, "sill": 0.9}
+  ]
+}

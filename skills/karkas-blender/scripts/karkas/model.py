@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from . import rules as R
+from . import extras, layers, rules as R
 from .geom import Member, Vec, vadd, vmul
 
 MM = 1 / 1000.0
@@ -39,7 +39,7 @@ DEFAULT_SPEC = {
         "girder": "auto",             # 'auto' | None — промежуточный прогон, если пролёт велик
     },
     "roof": {
-        "type": "gable",              # gable | flat
+        "type": "gable",              # gable | hip | flat
         "ridge_axis": "x",            # ось конька: 'x' | 'y'
         "slope": "1:2",               # подъём:заложение ("1:2") или число rise/run
         "rafter_spacing": 600,        # мм
@@ -52,6 +52,10 @@ DEFAULT_SPEC = {
     },
     "openings": [],                   # см. docstring frame_wall
     "interior_walls": [],             # [{"axis":"x"|"y","pos":м,"bearing":bool,"openings":[...]}]
+    "floor_openings": [],             # [{"x0","y0","x1","y1"}] — проёмы в перекрытии (6.2.11)
+    "cantilevers": [],                # [{"side":"N","overhang":0.4,"from":,"to":}] (6.2.10)
+    "stairs": None,                   # {"x","y","dir":"x"|"y","width":1.0} (раздел 12)
+    "layers": {},                     # выключатели слоёв оболочки, см. layers.LAYER_DEFAULTS
 }
 
 
@@ -178,11 +182,14 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
         return all(not (a - t / 2 < u < b + t / 2) for a, b in blocked)
 
     # --- рядовые стойки ---
+    stud_axes: list[float] = []
     for u in module_positions(length, spacing_mm, t_mm):
         if free(u):
+            stud_axes.append(u)
             add(Member("stud", f"Стойка {stud} ({name})", (t_mm, h_mm),
                        P(u, mid, z_bp_top), P(u, mid, z_stud_top), d, group,
                        "7.2.4: стойка цельная по всей высоте этажа"))
+
 
     # --- угловые стойки «плашмя» для крепления внутренней обшивки (7.2.11) ---
     for side, want in zip((0, 1), corner_nailers):
@@ -243,6 +250,7 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                        P(u, mid, z_bp_top), P(u, mid, z_head), d, group,
                        "7.2.13: внутренняя стойка проёма — от нижней обвязки до перемычки"))
         for u in (u0 - 1.5 * t, u0 + w + 1.5 * t):
+            stud_axes.append(u)
             add(Member("stud", f"Стойка крайняя {stud} ({name})", (t_mm, h_mm),
                        P(u, mid, z_bp_top), P(u, mid, z_stud_top), d, group,
                        "7.2.13: наружная стойка проёма — от нижней до верхней обвязки"))
@@ -266,8 +274,38 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                            (t_mm, h_mm), P(u0 + u, mid, z_bp_top), P(u0 + u, mid, z_sill - 0.038),
                            d, group, "конструктивно: заполнение под проёмом по модулю стоек"))
 
+    # --- связи жёсткости при отсутствии жёсткой обшивки (7.2.5) ---
+    if not sheathed and bearing:
+        run = min(height, length / 2)
+        if run > 0.3:
+            for u_start, sgn in ((0.0, +1), (length, -1)):
+                p1 = P(u_start + sgn * 0.0, mid, z_bp_top)
+                p2 = P(u_start + sgn * run, mid, z_bp_top + run)
+                if wall_kind == "external":
+                    add(Member("brace", "Связь жёсткости 18x88 (под 45°)", (18, 88),
+                               p1, p2, n, group,
+                               "7.2.5: доски ≥18x88 мм под 45° к стойкам в плоскости каркаса "
+                               "на каждом этаже, врезаются в стойки заподлицо с ними"))
+                else:
+                    add(Member("brace", "Распорка 38x89 (враспор между стойками)", (38, h_mm),
+                               P(0.0, mid, z_bp_top + height / 2),
+                               P(length, mid, z_bp_top + height / 2), (0, 0, 1), group,
+                               "7.2.5: во внутренних стенах бруски враспор между стойками "
+                               "в середине их высоты, прибиваются к каждой стойке"))
+                    break
+            res.ok(f"{name}/связи жёсткости",
+                   "7.2.5: каркас без жёсткой обшивки — установлены связи жёсткости")
+
     return {"z_base": z_base, "z_bottom_plate_top": z_bp_top,
-            "z_stud_top": z_stud_top, "z_wall_top": z_wall_top, "depth": h}
+            "z_stud_top": z_stud_top, "z_wall_top": z_wall_top, "depth": h,
+            "origin": origin, "d": d, "n": n, "length": length, "height": height,
+            "stud": stud, "spacing_mm": spacing_mm, "name": name,
+            "wall_kind": wall_kind, "top_plates": top_plates,
+            "stud_axes": sorted(stud_axes),
+            "openings": [{"u": o["u"], "width": o["width"],
+                          "sill": o.get("sill", 0.0),
+                          "head": o.get("height", 2.05) + o.get("sill", 0.0),
+                          "type": o.get("type", "window")} for o in openings]}
 
 
 # --------------------------------------------------------------------------
@@ -504,22 +542,41 @@ def frame_gable_roof(res: Result, spec: dict, *, z_plate_top: float, group: str,
         res.err("крыша/уклон", f"уклон {slope:.3f} < 1:6 — это плоская крыша (8.1.1), "
                                f"используйте roof.type='flat'")
 
+    # --- промежуточные опоры стропил: мансардные (опорные) стенки 8.2.3.4 ---
+    kw = rf.get("knee_walls")
+    if kw:
+        kw_offset = float(kw.get("offset", 1.5))
+        if not 0.3 < kw_offset < half - 0.3:
+            res.err("крыша/мансардные стенки",
+                    f"вынос опорной стенки {kw_offset:.2f} м должен быть в пределах "
+                    f"0,3…{half - 0.3:.2f} м от наружной стены")
+            kw_offset = max(0.3, min(kw_offset, half - 0.3))
+        rafter_span = max(kw_offset, half - kw_offset)
+        res.ok("крыша/мансардные стенки",
+               f"8.2.1.1 и 8.2.3.4: опорные стенки на расстоянии {kw_offset:.2f} м от наружных "
+               f"стен делят пролёт стропил на {kw_offset:.2f} и {half - kw_offset:.2f} м — "
+               f"расчётным остаётся {rafter_span:.2f} м")
+    else:
+        kw_offset = None
+        rafter_span = half
+
     # --- стропила ---
-    sec_r = rf.get("rafter") or R.pick_rafter(half, sp, snow)
+    sec_r = rf.get("rafter") or R.pick_rafter(rafter_span, sp, snow)
     if sec_r is None:
         res.err("крыша/стропила",
-                f"пролёт {half:.2f} м при шаге {sp} мм и снеге {snow} кПа не перекрывается "
-                f"(Б-6/Б-7) — нужны промежуточные опоры (затяжки/стойки/раскосы, 8.2.1.1)")
+                f"пролёт {rafter_span:.2f} м при шаге {sp} мм и снеге {snow} кПа не "
+                f"перекрывается (Б-6/Б-7) — нужны промежуточные опоры: затяжки, стойки, "
+                f"сжатые раскосы или опорные стенки roof.knee_walls (8.2.1.1, 8.2.3.4)")
         sec_r = "38x286"
     else:
         lim = R.rafter_max_span(sec_r, sp, snow)
-        if half <= lim + 1e-9:
+        if rafter_span <= lim + 1e-9:
             res.ok("крыша/стропила",
-                   f"{sec_r} @ {sp} мм, пролёт {half:.2f} м ≤ {lim:.2f} м "
+                   f"{sec_r} @ {sp} мм, пролёт {rafter_span:.2f} м ≤ {lim:.2f} м "
                    f"(табл. Б-{'6' if snow <= 2.0 else '7'}, снег {snow} кПа)")
         else:
             res.err("крыша/стропила",
-                    f"{sec_r} @ {sp} мм: пролёт {half:.2f} м > предела {lim:.2f} м")
+                    f"{sec_r} @ {sp} мм: пролёт {rafter_span:.2f} м > предела {lim:.2f} м")
     rt, rd = R.sec(sec_r)
     if spec["storeys"] >= 3 and rt < 89:
         res.warn("крыша/пожарные требования",
@@ -666,6 +723,61 @@ def frame_gable_roof(res: Result, spec: dict, *, z_plate_top: float, group: str,
         add(Member("fascia", f"Обвязка стропил (карниз) 38x{rd}", (38, rd), p1, p2, wd, group,
                    "8.3.1: толщина ≥38 мм, на неё опирается нижний край кровельного настила"))
 
+    # --- геометрия опорных стенок ---
+    if kw_offset is not None:
+        kt, kh = R.sec(kw.get("stud", "38x89"))
+        z_base_kw = z0 + cd * MM
+        for c in (kw_offset, span_dir - kw_offset):
+            z_top_kw = z_ridge_bottom - abs(c - half) * slope
+            hgt = z_top_kw - z_base_kw - 0.076
+            if hgt < 0.2:
+                res.warn("крыша/мансардные стенки",
+                         f"высота опорной стенки {hgt:.2f} м < 0,2 м — замените распорками")
+                continue
+            for zz, lab in ((z_base_kw + 0.019, "Нижняя обвязка опорной стенки"),
+                            (z_top_kw - 0.019, "Верхняя обвязка опорной стенки")):
+                if ridge_axis == "x":
+                    pp1, pp2 = (0.0, c, zz), (run_dir, c, zz)
+                else:
+                    pp1, pp2 = (c, 0.0, zz), (c, run_dir, zz)
+                add(Member("plate", f"{lab} 38x{kh}", (38, kh), pp1, pp2, (0, 0, 1), group,
+                           "8.2.3.4: опорная стенка с верхней и нижней обвязкой"))
+            for u in positions:
+                if ridge_axis == "x":
+                    pp1, pp2 = (u, c, z_base_kw + 0.038), (u, c, z_top_kw - 0.038)
+                    wd = (1, 0, 0)
+                else:
+                    pp1, pp2 = (c, u, z_base_kw + 0.038), (c, u, z_top_kw - 0.038)
+                    wd = (0, 1, 0)
+                add(Member("stud", f"Стойка опорной стенки {kw.get('stud', '38x89')}", (kt, kh),
+                           pp1, pp2, wd, group,
+                           "8.2.3.4: стойки 38x89 в одной плоскости со стропилами и балками "
+                           "чердачного перекрытия, прибиваются к ним гвоздями"))
+
+    # --- слои крыши (подшивка, утеплитель, настил) ---
+    _slopes = []
+    for sign in (-1, +1):
+        y_e = -oh_e if sign < 0 else span_dir + oh_e
+        y_r = half
+        z_e = z_ridge_bottom - abs(y_e - half) * slope + plumb
+        z_r = z_ridge_bottom + plumb
+        wslope = abs(y_r - y_e) / cos_t
+        nx = -math.sin(theta) * (1 if sign < 0 else -1)
+        th_deck = R.roof_deck_min_thickness(sp, "plywood") * MM
+        ym = (y_e + y_r) / 2 + nx * 0 
+        zm = (z_e + z_r) / 2 + cos_t * th_deck / 2
+        ym += (-math.sin(theta) if sign < 0 else math.sin(theta)) * th_deck / 2 * -1
+        wd = (0, -cos_t, -math.sin(theta)) if sign < 0 else (0, cos_t, -math.sin(theta))
+        if ridge_axis == "x":
+            pp1, pp2 = (-oh_g, ym, zm), (run_dir + oh_g, ym, zm)
+        else:
+            pp1, pp2 = (ym, -oh_g, zm), (ym, run_dir + oh_g, zm)
+            wd = (-cos_t, 0, -math.sin(theta)) if sign < 0 else (cos_t, 0, -math.sin(theta))
+        _slopes.append((pp1, pp2, wd, wslope))
+    layers.roof_layers(res, spec, layers.resolve(spec),
+                       {"z_ceiling_bottom": z0, "ceiling_spacing": sp,
+                        "rafter_spacing": sp, "slopes": _slopes}, group)
+
     deck = R.roof_deck_min_thickness(sp, "plywood")
     res.ok("крыша/настил", f"фанера ≥{deck} мм при шаге стропил {sp} мм (табл. 8-6); "
                            f"волокна поверхности — поперёк стропил, зазоры между листами ≥2 мм")
@@ -682,6 +794,223 @@ def frame_gable_roof(res: Result, spec: dict, *, z_plate_top: float, group: str,
 
     return {"rafter": sec_r, "ceiling_joist": sec_c, "z_ridge": z_rb_top,
             "slope": slope, "deck_mm": deck}
+
+
+def frame_hip_roof(res: Result, spec: dict, *, z_plate_top: float, group: str,
+                   wall_depth: float) -> dict:
+    """Вальмовая крыша, собираемая на месте.
+
+    СП даёт сечение накосных стропил (8.2.1.8: высота на ≥50 мм больше рядовых,
+    ширина ≥38 мм), но ТАБЛИЦ ПРОЛЁТОВ для накосных в Приложении Б нет — модель
+    сообщает об этом явно.
+    """
+    L, W = spec["plan"]["length"], spec["plan"]["width"]
+    rf = spec["roof"]
+    snow = float(spec["snow_kpa"])
+    slope = parse_slope(rf["slope"])
+    sp = int(rf["rafter_spacing"])
+    oh = float(rf.get("overhang_eave", 0.5))
+    add = res.members.append
+    theta = math.atan(slope)
+    cos_t = math.cos(theta)
+
+    swap = W > L                      # конёк всегда вдоль длинной стороны
+    A = max(L, W)                     # вдоль конька
+    B = min(L, W)                     # пролёт стропил
+    half = B / 2.0
+    ridge_len = A - B                 # 0 -> шатровая (пирамидальная) крыша
+
+    def P(a: float, b: float, z: float) -> Vec:
+        """(вдоль конька, поперёк, z) -> мировые координаты."""
+        return (b, a, z) if swap else (a, b, z)
+
+    if B > R.LIMITS["house_width_for_roof_tables_m"] + 1e-9:
+        res.err("крыша/область применения",
+                f"пролёт стропил {B:.2f} м > 9,8 м — таблицы Б-6/Б-7 неприменимы (8.2.1.3)")
+    if sp > R.LIMITS["rafter_spacing_mm"]:
+        res.err("крыша/шаг", f"шаг стропил {sp} мм > 600 мм (8.2.1.3)")
+    if slope < 1 / 6:
+        res.err("крыша/уклон", f"уклон {slope:.3f} < 1:6 — это плоская крыша (8.1.1)")
+    if ridge_len < 0.05:
+        res.ok("крыша/форма", f"ширина {B:.2f} м ≈ длине {A:.2f} м — крыша шатровая "
+                              f"(пирамидальная), конькового прогона нет")
+
+    # --- рядовые стропила ---
+    sec_r = rf.get("rafter") or R.pick_rafter(half, sp, snow)
+    if sec_r is None:
+        res.err("крыша/стропила",
+                f"пролёт {half:.2f} м при шаге {sp} мм и снеге {snow} кПа не перекрывается "
+                f"(Б-6/Б-7) — нужны промежуточные опоры (8.2.1.1)")
+        sec_r = "38x286"
+    else:
+        lim = R.rafter_max_span(sec_r, sp, snow)
+        (res.ok if half <= lim + 1e-9 else res.err)(
+            "крыша/стропила",
+            f"{sec_r} @ {sp} мм, пролёт {half:.2f} м "
+            f"{'≤' if half <= lim + 1e-9 else '>'} {lim:.2f} м "
+            f"(табл. Б-{'6' if snow <= 2.0 else '7'}, снег {snow} кПа)")
+    rt, rd = R.sec(sec_r)
+    plumb = rd * MM / cos_t
+
+    # --- накосные (диагональные) стропила: 8.2.1.8 ---
+    hip_d = next((d for d in R.JOIST_DEPTHS if d >= rd + 50), rd + 50)
+    sec_h = rf.get("hip_rafter") or f"38x{hip_d}"
+    ht, hd = R.sec(sec_h)
+    hip_run = half * math.sqrt(2.0)
+    res.ok("крыша/накосные стропила",
+           f"8.2.1.8: {sec_h} — высота сечения на {hd - rd} мм больше рядовых "
+           f"({rd} мм), ширина ≥38 мм")
+    res.warn("крыша/накосные стропила",
+             f"пролёт накосного стропила {hip_run:.2f} м по горизонтали. "
+             f"Таблицы Приложения Б пролёты НАКОСНЫХ стропил не нормируют — п. 8.2.1.8 задаёт "
+             f"только сечение. Несущую способность проверьте расчётом по СНиП II-25 "
+             f"(нагрузка на накосное выше рядового: на него опираются нарожники)")
+
+    # --- балки чердачного перекрытия (затяжки) ---
+    cold = rf.get("attic", "cold") == "cold"
+    table_c = "B3" if cold else "B1"
+    mid_support = rf.get("ceiling_mid_support", "auto")
+    if mid_support == "auto":
+        mid_support = any(iw.get("bearing") for iw in spec.get("interior_walls", []))
+    c_span = B / 2 if mid_support else B
+    sec_c = rf.get("ceiling_joist") or R.pick_joist(c_span, sp, table=table_c, bracing="hv")
+    if sec_c is None:
+        c_span, mid_support = B / 2, True
+        sec_c = R.pick_joist(c_span, sp, table=table_c, bracing="hv") or "38x286"
+        res.warn("крыша/чердачное перекрытие",
+                 f"полный пролёт {B:.2f} м не перекрывается — принято {sec_c} "
+                 f"с промежуточной опорой посередине")
+    else:
+        lim = R.joist_max_span(sec_c, sp, table=table_c, bracing="hv")
+        res.ok("крыша/чердачное перекрытие",
+               f"{sec_c} @ {sp} мм, пролёт {c_span:.2f} м ≤ {lim:.2f} м "
+               f"(табл. {'Б-3' if cold else 'Б-1'})")
+    ct, cd = R.sec(sec_c)
+    if slope >= 1 / 3 - 1e-9:
+        n_nails = R.rafter_tie_nails(slope_key(slope), sp, snow)
+        if n_nails is None:
+            res.err("крыша/узел стропило-балка",
+                    f"табл. 8-1: уклон {slope_key(slope)} / шаг {sp} / снег {snow} кПа "
+                    f"не допускается без расчёта")
+        else:
+            res.ok("крыша/узел стропило-балка",
+                   f"табл. 8-1: ≥{n_nails} гвоздей 80 мм в соединении стропила с балкой")
+
+    z0 = z_plate_top
+    z_ridge_bottom = z0 + half * slope
+    ridge_t = int(rf.get("ridge_board", 38))
+
+    def zr(dist_from_eave_line: float) -> float:
+        """z низа стропила на горизонтальном удалении от наружной грани стены."""
+        return z0 + dist_from_eave_line * slope
+
+    # --- коньковая доска ---
+    if ridge_len > 0.05:
+        zc = z_ridge_bottom + plumb / 2
+        add(Member("ridge", f"Коньковая доска {ridge_t}x{int(plumb * 1000)}",
+                   (ridge_t, int(plumb * 1000)),
+                   P(half, half, zc), P(A - half, half, zc),
+                   P(0, 1, 0) if not swap else (1, 0, 0), group,
+                   "8.2.2.2: толщина ≥19 мм; стропила соединяются через неё встык"))
+
+    wd_long = (1, 0, 0) if not swap else (0, 1, 0)     # сечение поперёк стропила, вдоль конька
+    wd_short = (0, 1, 0) if not swap else (1, 0, 0)
+
+    def rafter(a: float, b1: float, b2: float, wd):
+        """Стропило вдоль поперечной оси: от b1 до b2 при координате a вдоль конька."""
+        z1 = zr(min(b1, B - b1) if 0 <= b1 <= B else -abs(min(b1, B - b1))) + plumb / 2
+        z2 = zr(min(b2, B - b2) if 0 <= b2 <= B else -abs(min(b2, B - b2))) + plumb / 2
+        add(Member("rafter", f"Стропило {sec_r}", (rt, rd),
+                   P(a, b1, z1), P(a, b2, z2), wd, group,
+                   "8.2.2.3: опирание ≥38 мм, запил на опоре"))
+
+    def jack(a: float, b1: float, b2: float, wd, lab="Нарожник"):
+        z1 = zr(min(b1, B - b1)) + plumb / 2
+        z2 = zr(min(b2, B - b2)) + plumb / 2
+        add(Member("jack_rafter", f"{lab} {sec_r}", (rt, rd),
+                   P(a, b1, z1), P(a, b2, z2), wd, group,
+                   "нарожник опирается на накосное стропило; сдваивание у проёмов по 8.2.1.10"))
+
+    # --- стропила вдоль длинных сторон ---
+    n_long = 0
+    for u in module_positions(A, sp, rt):
+        lim_hip = min(u, A - u)                 # накос в плане: y = расстояние от торца
+        for sgn, b_eave, b_mid in ((0, -oh, half), (1, B + oh, half)):
+            if lim_hip >= half - 1e-6:
+                b2 = half + (ridge_t * MM / 2) * (1 if sgn else -1) * (-1 if sgn else 1)
+                b2 = half - ridge_t * MM / 2 if sgn == 0 else half + ridge_t * MM / 2
+                if ridge_len <= 0.05:
+                    continue
+                rafter(u, b_eave, b2, wd_long); n_long += 1
+            else:
+                if lim_hip < 0.1:
+                    continue
+                b2 = lim_hip if sgn == 0 else B - lim_hip
+                jack(u, b_eave, b2, wd_long); n_long += 1
+
+    # --- нарожники вальмовых скатов (идут вдоль конька, к торцам) ---
+    for v in module_positions(B, sp, rt):
+        lim = min(v, B - v)
+        if lim < 0.1 or abs(v - half) < 1e-6:
+            continue
+        z = zr(lim) + plumb / 2
+        for a_eave, a_end in ((-oh, lim), (A + oh, A - lim)):
+            add(Member("jack_rafter", f"Нарожник вальмы {sec_r}", (rt, rd),
+                       P(a_eave, v, zr(0) + plumb / 2 if a_eave < 0 or a_eave > A else z),
+                       P(a_end, v, z), wd_short, group,
+                       "нарожник вальмового ската опирается на накосное стропило"))
+
+    # --- центральные стропила вальм ---
+    for a_eave, a_top in ((-oh, half), (A + oh, A - half)):
+        add(Member("rafter", f"Центральное стропило вальмы {sec_r}", (rt, rd),
+                   P(a_eave, half, zr(-oh) + plumb / 2),
+                   P(a_top, half, z_ridge_bottom + plumb / 2), wd_short, group,
+                   "8.2.2.3: центральное стропило вальмового ската"))
+
+    # --- накосные стропила: 4 диагонали ---
+    oh_diag = oh * math.sqrt(2.0)
+    plumb_h = hd * MM / cos_t
+    for (a_c, b_c, a_r, b_r) in ((0.0, 0.0, half, half), (0.0, B, half, half),
+                                 (A, 0.0, A - half, half), (A, B, A - half, half)):
+        da, db = a_c - a_r, b_c - b_r
+        nrm = math.hypot(da, db)
+        a_out, b_out = a_c + da / nrm * oh_diag, b_c + db / nrm * oh_diag
+        add(Member("hip_rafter", f"Накосное стропило {sec_h}", (ht, hd),
+                   P(a_out, b_out, zr(-oh) + plumb_h / 2),
+                   P(a_r, b_r, z_ridge_bottom + plumb_h / 2), (0, 0, 1), group,
+                   f"8.2.1.8: высота сечения на ≥50 мм больше рядовых стропил, ширина ≥38 мм. "
+                   f"Пролёт накосного таблицами Б не нормируется — проверять расчётом"))
+
+    # --- балки чердачного перекрытия ---
+    for u in module_positions(A, sp, ct):
+        zc2 = z0 + cd * MM / 2
+        segs = [(0.0, B)] if not mid_support else [(0.0, half), (half, B)]
+        for b1, b2 in segs:
+            add(Member("ceiling_joist", f"Балка чердачного перекрытия {sec_c}", (ct, cd),
+                       P(u, b1, zc2), P(u, b2, zc2), (0, 0, 1), group,
+                       "8.2.2.1: работает как затяжка"))
+
+    # --- обвязка стропил по карнизу, все четыре стороны ---
+    z_f = zr(-oh) + plumb / 2
+    for p1, p2, wdf in ((P(-oh, -oh, z_f), P(A + oh, -oh, z_f), wd_short),
+                        (P(-oh, B + oh, z_f), P(A + oh, B + oh, z_f), wd_short),
+                        (P(-oh, -oh, z_f), P(-oh, B + oh, z_f), wd_long),
+                        (P(A + oh, -oh, z_f), P(A + oh, B + oh, z_f), wd_long)):
+        add(Member("fascia", f"Обвязка стропил (карниз) 38x{rd}", (38, rd), p1, p2, wdf, group,
+                   "8.3.1: толщина ≥38 мм, опора нижнего края кровельного настила"))
+
+    deck = R.roof_deck_min_thickness(sp, "plywood")
+    res.ok("крыша/настил", f"фанера ≥{deck} мм при шаге стропил {sp} мм (табл. 8-6)")
+    res.ok("крыша/вентиляция",
+           f"8.7.5: в нижней части вальмовых крыш продухи не устраивают. Общая площадь "
+           f"продухов ≥1/300 ≈ {L * W / 300:.2f} м² (8.7.6), ≥25 % в верхней части; "
+           f"зазор над утеплителем ≥60 мм (8.7.11). Приток — через подшивку карниза (8.7.2), "
+           f"вытяжка — коньковые продухи или слуховые окна (8.7.8)")
+    res.ok("крыша/доступ", "8.8: люк-лаз ≥500x700 мм с крышкой и запирающим устройством")
+
+    return {"rafter": sec_r, "hip_rafter": sec_h, "ceiling_joist": sec_c,
+            "z_ridge": z_ridge_bottom + plumb, "slope": slope, "deck_mm": deck,
+            "ridge_length": max(0.0, ridge_len)}
 
 
 def frame_flat_roof(res: Result, spec: dict, *, z_plate_top: float, group: str) -> dict:
@@ -807,6 +1136,18 @@ def build_house(user_spec: dict | None = None) -> Result:
                           table="B1", on_foundation=True, label="перекрытие 1 этажа")
     z_floor = plat["z_top"]
     res.levels["floor_1"] = z_floor
+    on = layers.resolve(spec)
+
+    _fo_all = spec.get("floor_openings", [])
+    _fo_default = 2 if storeys > 1 else 1
+
+    def _fo_for(storey: int) -> list[dict]:
+        return [o for o in _fo_all if int(o.get("storey", _fo_default)) == storey]
+
+    fo = extras.floor_openings(res, spec, plat, "01_Перекрытие_1",
+                               _fo_for(1), "перекрытие 1 этажа")
+    extras.suppress_joists_in_openings(res, fo, spec)
+    extras.cantilevers(res, spec, plat, "01_Перекрытие_1", spec.get("cantilevers", []))
 
     # --- наружные стены 1-го этажа ---
     walls = []
@@ -836,6 +1177,7 @@ def build_house(user_spec: dict | None = None) -> Result:
             wall_kind="external", snow_kpa=snow, sheathed=bool(spec.get("sheathed", True)),
             name=f"наружная {tag}")
         walls.append(info)
+        layers.wall_layers(res, info, on, spec, "02_Стены_1")
         area = wlen * H
         oa = sum(o["width"] * o["height"] for o in ops)
         opening_area[tag] = (oa, area)
@@ -870,7 +1212,8 @@ def build_house(user_spec: dict | None = None) -> Result:
             origin = (iw["pos"], iw.get("from", t_ext))
             d, n = (0, 1, 0), (-1, 0, 0)
             wlen = iw.get("to", W - t_ext) - origin[1]
-        frame_wall(res, origin=origin, d=d, n=n, length=wlen, z_base=z_floor, stud=istud,
+        _iw_info = frame_wall(res, origin=origin, d=d, n=n, length=wlen, z_base=z_floor,
+                   stud=istud,
                    spacing_mm=isp, height=H, group="03_Внутренние_стены",
                    openings=[{"u": o.get("u", 0.0), "width": o["width"], "height": o["height"],
                               "sill": o.get("sill", 0.0), "type": o.get("type", "door"),
@@ -880,6 +1223,7 @@ def build_house(user_spec: dict | None = None) -> Result:
                    load_case="roof" if bearing else "attic", wall_kind="internal",
                    snow_kpa=snow, sheathed=bool(spec.get("sheathed", True)),
                    name=f"внутренняя {i}" + (" (несущая)" if bearing else " (перегородка)"))
+        layers.wall_layers(res, _iw_info, on, spec, "03_Внутренние_стены")
         if not bearing:
             res.ok(f"внутренняя стена {i}/опирание",
                    "6.3.1: перегородка опирается на чёрный пол; при положении параллельно балкам "
@@ -895,7 +1239,12 @@ def build_house(user_spec: dict | None = None) -> Result:
         plat_n = frame_platform(res, spec, z_base=z_cur, group=f"0{s}a_Перекрытие_{s}",
                                 storeys_above=storeys - s + 1, table="B1",
                                 label=f"перекрытие {s} этажа")
+        _fo_n = extras.floor_openings(res, spec, plat_n, f"0{s}a_Перекрытие_{s}",
+                                      _fo_for(s), f"перекрытие {s} этажа")
+        extras.suppress_joists_in_openings(res, _fo_n, spec)
+        layers.platform_layers(res, spec, on, plat_n, f"0{s}a_Перекрытие_{s}")
         z_fl = plat_n["z_top"]
+        res.levels[f"floor_{s}"] = z_fl
         tops = []
         for tag, origin, d, n, wlen in wall_defs:
             info = frame_wall(res, origin=origin, d=d, n=n, length=wlen, z_base=z_fl,
@@ -909,17 +1258,40 @@ def build_house(user_spec: dict | None = None) -> Result:
         z_cur = tops[0]
         res.levels[f"wall_top_{s}"] = z_cur
 
+    # --- лестница (раздел 12) ---
+    if spec.get("stairs"):
+        st = dict(spec["stairs"])
+        z_from = res.levels["floor_1"]
+        z_to = res.levels.get("floor_2", res.levels.get("wall_top_1"))
+        _zu = None
+        if storeys > 1 and "floor_2" in res.levels:
+            _zu = (res.levels["floor_2"] - plat["subfloor_mm"] * MM - plat["depth"])
+        info = extras.stairs(res, spec, st, z_from, z_to, "04_Лестница", _zu)
+        if not spec.get("floor_openings"):
+            res.warn("лестница/проём",
+                     "в спецификации нет floor_openings — добавьте проём в перекрытии над "
+                     "маршем, иначе высота в свету ≥1,95 м не обеспечивается (12.2.1.3), "
+                     f"ориентировочный размер проёма "
+                     f"{(info.get('opening_min') or info['run']):.2f}x{info['width']:.2f} м")
+        res.picked["stairs"] = (f"{info['n']} ступеней, подступёнок {info['riser']:.0f} мм, "
+                                f"проступь {info['tread']:.0f} мм, марш {info['run']:.2f} м")
+
     # --- крыша ---
     if roof_type == "flat":
         roof = frame_flat_roof(res, spec, z_plate_top=z_cur, group="10_Крыша")
+    elif roof_type in ("hip", "вальмовая"):
+        roof = frame_hip_roof(res, spec, z_plate_top=z_cur, group="10_Крыша",
+                              wall_depth=t_ext)
     else:
         roof = frame_gable_roof(res, spec, z_plate_top=z_cur, group="10_Крыша",
                                 wall_depth=t_ext)
     res.levels["ridge"] = roof["z_ridge"]
-    res.picked = {"ext_stud": ext_stud, "stud_spacing": sp, "floor_joist": plat["joist"],
-                  "floor_spacing": plat["spacing"], "subfloor_mm": plat["subfloor_mm"],
-                  **{k: v for k, v in roof.items() if k != "z_ridge"},
-                  "load_case_table_7_1": load_case}
+    res.picked.update({"ext_stud": ext_stud, "stud_spacing": sp,
+                       "floor_joist": plat["joist"],
+                       "floor_spacing": plat["spacing"],
+                       "subfloor_mm": plat["subfloor_mm"],
+                       **{k: v for k, v in roof.items() if k != "z_ridge"},
+                       "load_case_table_7_1": load_case})
 
     # --- обшивки ---
     sh_gkl = R.sheathing_min_thickness(sp, "gkl")

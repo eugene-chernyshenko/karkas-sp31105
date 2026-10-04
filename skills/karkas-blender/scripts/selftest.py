@@ -88,9 +88,91 @@ true(sum(r["volume_m3"] for r in bom(res.members)) > 3.0, "подозрител�
 bad = build_house({"plan": {"length": 9.0, "width": 12.0}, "snow_kpa": 3.0, "storeys": 3})
 true(bad.errors, "дом шириной 12 м при снеге 3,0 кПа должен давать ✗")
 
+# --- новые конструкции ---
+hip = build_house({"plan": {"length": 11.0, "width": 8.0}, "snow_kpa": 1.5,
+                   "ext_stud": "38x140", "roof": {"type": "hip", "slope": "1:2"},
+                   "interior_walls": [{"axis": "x", "pos": 4.0, "bearing": True}]})
+true(not hip.errors, f"вальмовая крыша должна проходить без ✗: {hip.errors}")
+hk = {m.kind for m in hip.members}
+for k in ("hip_rafter", "jack_rafter", "ridge"):
+    true(k in hk, f"вальмовая крыша: нет элементов {k}")
+true(sum(1 for m in hip.members if m.kind == "hip_rafter") == 4,
+     "вальмовая крыша: должно быть ровно 4 накосных стропила")
+true(any("накосн" in f[2] and f[0] == "WARN" for f in hip.findings),
+     "вальма: должно быть предупреждение, что пролёт накосных таблицами не нормируется")
+eq(hip.picked["hip_rafter"], "38x235", "8.2.1.8: накосное на ≥50 мм выше рядового 38x184")
+
+# пирамидальная (шатровая) крыша
+pyr = build_house({"plan": {"length": 8.0, "width": 8.0}, "ext_stud": "38x140",
+                   "roof": {"type": "hip", "slope": "1:2"},
+                   "interior_walls": [{"axis": "x", "pos": 4.0, "bearing": True}]})
+true(not pyr.errors, f"шатровая крыша должна проходить без ✗: {pyr.errors}")
+
+# мансардные (опорные) стенки сокращают пролёт стропил
+kn = build_house({"plan": {"length": 9.0, "width": 8.0}, "ext_stud": "38x140",
+                  "roof": {"slope": "1:1.33", "attic": "living",
+                           "knee_walls": {"offset": 1.6}}})
+true(not kn.errors, f"мансардные стенки: {kn.errors}")
+true(any("опорные стенки" in f[2] for f in kn.findings), "нет записи об опорных стенках")
+eq(kn.picked["rafter"], "38x140", "с опорной стенкой пролёт 2,40 м -> 38x140")
+
+# проёмы в перекрытии 6.2.11
+fo = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140",
+                  "floor_openings": [{"x0": 1.0, "y0": 1.0, "x1": 2.4, "y1": 2.0}],
+                  "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True}]})
+true(any(m.kind == "trimmer" for m in fo.members), "нет обрамления проёма в перекрытии")
+true(any("1,2 м" in f[2] for f in fo.findings), "6.2.11.1: не сработало правило >1,2 м")
+big = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140",
+                   "floor_openings": [{"x0": 1.0, "y0": 1.0, "x1": 2.0, "y1": 4.5}]})
+true(any("6.2.11.2" in f[2] and f[0] == "ERR" for f in big.findings),
+     "проём шириной 3,5 м вдоль балок должен давать ✗ по 6.2.11.2")
+
+# консоли 6.2.10
+cv = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140",
+                  "cantilevers": [{"side": "S", "overhang": 0.5}],
+                  "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True}]})
+true(any("6.2.10.1" in f[2] for f in cv.findings), "не сработало правило 6.2.10.1")
+cv2 = build_house({"plan": {"length": 9.0, "width": 7.0},
+                   "cantilevers": [{"side": "S", "overhang": 0.9}]})
+true(any("600 мм" in f[2] and f[0] == "ERR" for f in cv2.findings),
+     "вылет 900 мм должен давать ✗ (6.2.10.1)")
+
+# лестница, раздел 12
+stc = build_house({"plan": {"length": 9.0, "width": 7.0}, "storeys": 2,
+                   "int_stud": "38x140", "ext_stud": "38x140",
+                   "floor_openings": [{"x0": 1.7, "y0": 1.0, "x1": 4.6, "y1": 2.1}],
+                   "stairs": {"x": 1.0, "y": 1.0, "dir": "x", "width": 1.0},
+                   "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True,
+                                       "spacing": 400}]})
+true(not stc.errors, f"лестница: {stc.errors}")
+true(any(m.kind == "tread" for m in stc.members), "нет ступеней")
+true(any("косоур" in f[2] for f in stc.findings),
+     "нет оговорки, что сечение косоуров СП не нормирует")
+true(any("12.2.1.3" in f[2] for f in stc.findings),
+     "лестница: не посчитана требуемая длина проёма по высоте в свету")
+narrow = build_house({"plan": {"length": 9.0, "width": 7.0}, "storeys": 2,
+                      "stairs": {"x": 1.0, "y": 1.0, "dir": "x", "width": 0.8}})
+true(any("900 мм" in f[2] and f[0] == "ERR" for f in narrow.findings),
+     "лестница шириной 800 мм должна давать ✗ (12.2.1.1)")
+
+# слои оболочки
+lay = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140",
+                   "layers": "all",
+                   "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True}]})
+lk = {m.kind for m in lay.members}
+for k in ("sheathing_ext", "sheathing_int", "insulation", "vapour", "cladding",
+          "batten", "ceiling", "roof_deck"):
+    true(k in lk, f"слой {k} не построен при layers='all'")
+true(any("теплотехнич" in f[2] and f[0] == "WARN" for f in lay.findings),
+     "нет предупреждения, что толщина утеплителя требует расчёта")
+plain = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140"})
+true(not any(m.kind in ("insulation", "cladding") for m in plain.members),
+     "по умолчанию слои оболочки строиться не должны")
+
 if fails:
     print("ПРОВАЛЕНО:")
     for f in fails:
         print("  ✗", f)
     sys.exit(1)
-print(f"OK — все проверки пройдены ({len(res.members)} элементов в эталонной модели)")
+print(f"OK — все проверки пройдены ({len(res.members)} элементов в эталонной модели, "
+      f"{len(hip.members)} в вальмовой, {len(lay.members)} со всеми слоями)")

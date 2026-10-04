@@ -29,6 +29,17 @@ PALETTE = {
     "fascia":        (0.35, 0.58, 0.42, 1.0),
     "roof_beam":     (0.45, 0.70, 0.50, 1.0),
     "subfloor":      (0.80, 0.78, 0.72, 0.30),
+    "sheathing_ext": (0.86, 0.84, 0.76, 0.85),
+    "sheathing_int": (0.93, 0.93, 0.90, 0.85),
+    "insulation":    (0.95, 0.86, 0.45, 0.55),
+    "vapour":        (0.55, 0.75, 0.90, 0.40),
+    "cladding":      (0.62, 0.45, 0.33, 1.0),
+    "batten":        (0.78, 0.66, 0.48, 1.0),
+    "ceiling":       (0.95, 0.95, 0.93, 0.85),
+    "roof_deck":     (0.70, 0.62, 0.50, 0.90),
+    "trimmer":       (0.30, 0.42, 0.65, 1.0),
+    "cantilever":    (0.42, 0.55, 0.75, 1.0),
+    "tread":         (0.80, 0.52, 0.28, 1.0),
     "foundation":    (0.55, 0.55, 0.58, 1.0),
 }
 DEFAULT_COLOR = (0.75, 0.60, 0.40, 1.0)
@@ -224,7 +235,7 @@ def setup_scene(objs, *, view: str = "iso", resolution=(1920, 1080), engine: str
         "top":   Vector((0.01, -0.01, 2.6)),
     }
     d = dirs.get(view, dirs["iso"]).normalized()
-    cam.location = center + d * size * 1.55
+    cam.location = center + d * size * 1.85
     direction = center - cam.location
     cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     return {"camera": cam, "sun": sun, "center": center, "size": size}

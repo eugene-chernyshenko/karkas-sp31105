@@ -1,0 +1,25 @@
+{
+  "name": "dom_mansarda_9x8",
+  "snow_kpa": 1.5,
+  "storeys": 2,
+  "plan": {"length": 9.0, "width": 8.0},
+  "wall_height": 2.5,
+  "stud_spacing": 400,
+  "ext_stud": "38x140",
+  "int_stud": "38x140",
+  "floor": {"direction": "y", "spacing": 400},
+  "roof": {"type": "gable", "ridge_axis": "x", "slope": "1:1.33",
+           "rafter_spacing": 600, "attic": "living",
+           "knee_walls": {"offset": 1.6}, "overhang_eave": 0.45, "overhang_gable": 0.4},
+  "floor_openings": [{"storey": 2, "x0": 1.7, "y0": 1.0, "x1": 4.6, "y1": 2.1}],
+  "stairs": {"x": 1.0, "y": 1.0, "dir": "x", "width": 1.0},
+  "interior_walls": [
+    {"axis": "x", "pos": 4.0, "bearing": true, "spacing": 400,
+     "openings": [{"u": 5.5, "width": 0.9, "height": 2.05, "type": "door"}]}
+  ],
+  "openings": [
+    {"wall": "S", "u": 2.0, "width": 1.5, "height": 1.5, "sill": 0.9},
+    {"wall": "S", "u": 6.0, "width": 1.0, "height": 2.1, "sill": 0.0, "type": "door"},
+    {"wall": "N", "u": 3.0, "width": 1.5, "height": 1.5, "sill": 0.9}
+  ]
+}
