@@ -15,7 +15,11 @@
 ```
 SP-31-105-2002.pdf                      оригинал свода правил
 docs/sp31105-full.txt                   полный текст для grep (маркеры ===== PAGE N =====)
-out/                                    результаты: .blend, .png, отчёты, ведомости
+out/current.blend                       ЖИВАЯ модель — она открыта в Blender
+out/current.json                        её спецификация
+out/                                    прочие результаты: .png, отчёты, ведомости
+tools/karkas_autoreload.py              аддон автоперезагрузки .blend
+tools/install_autoreload.sh             установка аддона
 .claude-plugin/                         манифесты плагина Claude Code
 commands/                               слэш-команды /karkas-sp31105:build и :check
 .claude/skills/karkas-blender           симлинк -> skills/karkas-blender
@@ -40,9 +44,34 @@ skills/karkas-blender/
 - `rules.py` / `model.py` — чистый Python, работают и без Blender (режим `--check`).
 - Результаты пиши в `out/`, временные файлы — в scratchpad, не в корень проекта.
 
+## Живая модель
+
+Рабочая модель всегда лежит в **`out/current.blend`**, её спецификация — **`out/current.json`**.
+Пересобирай ТУДА ЖЕ:
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender -b \
+    --python .claude/skills/karkas-blender/scripts/build_house.py -- \
+    --spec out/current.json --out out/current --open
+```
+
+Открытый Blender перечитает файл сам — в нём включён аддон `karkas_autoreload`
+(`tools/karkas_autoreload.py`), он следит за mtime и делает revert. Флаг `--open`
+запускает Blender, только если файл ещё никем не открыт. Проверить, что перезагрузка
+прошла: `tail ~/.cache/karkas/autoreload.log`.
+
+Если в сцене есть несохранённые правки, аддон перезагрузку пропускает и пишет об этом —
+тогда File > Revert вручную.
+
+**Не создавай новых имён файлов для той же модели** (`_v2`, `_fixed` и т. п.) — иначе
+у пользователя в Blender останется открытым старый. Меняешь спецификацию — правь
+`out/current.json` и пересобирай в `out/current`.
+
 ## Правила работы
 
 - Сначала `--check` (секунды), потом Blender. Не рендерь, пока в отчёте есть `✗`.
+- После любой правки кода генератора **пересобери `out/current`**, иначе у пользователя
+  в Blender останется устаревшая модель.
 - Все строки `✗` и `!` из `_report.txt` пересказывай пользователю — это нарушения норм.
 - Ссылайся на конкретные пункты и таблицы СП («табл. Б-6», «п. 7.2.13»), а не «по нормам».
 - Размеры: сечения в мм (`38x140`), пролёты и координаты в метрах.

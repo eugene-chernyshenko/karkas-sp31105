@@ -65,6 +65,20 @@ python3 $K/scripts/build_house.py --check --out out/d \
 
 На macOS вместо `blender` подставьте полный путь (см. [Требования](#требования)).
 
+### Живая модель
+
+Чтобы открытый Blender сам подхватывал каждую пересборку:
+
+```bash
+tools/install_autoreload.sh          # один раз
+blender -b --python $K/scripts/build_house.py -- \
+    --spec out/current.json --out out/current --open
+```
+
+Аддон `karkas_autoreload` следит за файлом и перечитывает его (несохранённые правки
+в сцене не затирает — тогда просто пишет в `~/.cache/karkas/autoreload.log`).
+`--open` запускает Blender, только если файл ещё не открыт.
+
 ## Что получается
 
 | Файл | Содержание |
@@ -191,6 +205,8 @@ skills/karkas-blender/
     scripts/build_house.py              CLI
     scripts/selftest.py                 самопроверка таблиц и генератора
     examples/                           dom_9x7, dom_valma_11x8, dom_mansarda_9x8
+tools/karkas_autoreload.py              аддон автоперезагрузки .blend в Blender
+tools/install_autoreload.sh             установка аддона
 ```
 
 ## Установка в Claude Code

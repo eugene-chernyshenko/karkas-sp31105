@@ -42,6 +42,9 @@ def parse_args():
     p.add_argument("--samples", type=int, default=32)
     p.add_argument("--resolution", default="1920x1080")
     p.add_argument("--no-save", action="store_true", help="не сохранять .blend")
+    p.add_argument("--open", action="store_true",
+                   help="открыть результат в Blender GUI, если он ещё не открыт "
+                        "(дальше файл перечитывается сам аддоном karkas_autoreload)")
     p.add_argument("--strict", action="store_true",
                    help="завершиться с кодом 1 при любой ошибке соответствия СП")
     return p.parse_args(argv_after_dashdash())
@@ -98,6 +101,31 @@ def resolve_spec(path: str) -> str:
                      + ", ".join(sorted(os.listdir(os.path.join(SKILL_DIR, "examples")))))
 
 
+BLENDER_APP = "/Applications/Blender.app/Contents/MacOS/Blender"
+
+
+def ensure_open(blend: str) -> str:
+    """Открыть .blend в GUI, если ни один инстанс Blender его ещё не держит."""
+    import subprocess
+    try:
+        ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
+    except OSError:
+        ps = ""
+    if any(blend in line and "-b" not in line.split() for line in ps.splitlines()):
+        return f"уже открыт в Blender: {blend}"
+    if sys.platform == "darwin" and os.path.exists("/Applications/Blender.app"):
+        cmd = ["open", "-na", "/Applications/Blender.app", "--args", blend]
+    else:
+        exe = os.environ.get("BLENDER", "blender")
+        cmd = [exe, blend]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return f"открыт в Blender: {blend}"
+    except OSError as e:
+        return f"не удалось открыть Blender ({e}); откройте вручную: {blend}"
+
+
 def main():
     a = parse_args()
     spec = json.load(open(resolve_spec(a.spec), encoding="utf-8")) if a.spec else {}
@@ -128,6 +156,8 @@ def main():
                 blend = os.path.abspath(a.out + ".blend")
                 bpy.ops.wm.save_as_mainfile(filepath=blend)
                 print(f"записано: {blend}")
+            if a.open:
+                print(ensure_open(blend if not a.no_save else os.path.abspath(a.out + ".blend")))
             if a.render:
                 w, h = (int(x) for x in a.resolution.lower().split("x"))
                 for view in a.views.split(","):
