@@ -17,6 +17,7 @@ MM = 1 / 1000.0
 
 LAYER_DEFAULTS = {
     "wall_sheathing_ext": False,   # наружная защитная обшивка каркаса (7.3.2, 10.4.4.2)
+    "windproof": False,            # водовоздухозащитный слой, он же ветрозащита (9.3.2.8)
     "wall_sheathing_int": False,   # внутренняя обшивка ГКЛ/ГВЛ (7.3.1, табл. 7-3)
     "wall_insulation": False,      # утеплитель между стойками (9.2.2.2 «а»)
     "interior_insulation": False,  # заполнение внутренних стен — звукоизоляция (7.5.2)
@@ -38,6 +39,15 @@ DEFAULT_PLATE_MM = 1000
 # Толщина одной плиты утеплителя, мм. Глубина каркаса набирается слоями по
 # столько, швы слоёв перекрываются. 0 — один кусок на всю глубину.
 DEFAULT_LAYER_MM = 50
+
+MATERIAL_NAMES = {"osb": "ОСП", "plywood": "фанера", "lumber": "пиломатериал",
+                  "dvp": "ДВП", "csp": "ЦСП", "gkl": "ГКЛ", "gvl": "ГВЛ"}
+
+# 9.3.2.8: «материалы на древесной основе (например, из фанеры, древесностружечных
+# плит, пиломатериалов)» — при такой наружной обшивке водовоздухозащитный слой
+# обязателен. ЦСП с минеральным связующим сюда не отношу.
+WOOD_BASED = {"osb", "plywood", "lumber", "dvp"}
+DEFAULT_SHEATHING_EXT = "osb"
 
 # Утеплитель — в своём слое, а не в слое стены/крыши: иначе выключатель крыши
 # прячет и утеплитель чердачного перекрытия, а посмотреть на один утеплитель
@@ -161,12 +171,33 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                    p1, p2, n, group, note))
 
     # --- наружная защитная обшивка каркаса ---
+    _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
+    mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)
+    th_ext = 0.0
     if on["wall_sheathing_ext"] and ext:
-        th = float(int(round(max(R.sheathing_min_thickness(sp, "plywood"), 9.5))))
-        slab("sheathing_ext", f"Наружная обшивка фанера {th:g} мм", th, -th * MM,
+        th = float(int(round(max(R.sheathing_min_thickness(sp, mat_ext), 9.5))))
+        th_ext = th * MM
+        _mn = MATERIAL_NAMES.get(mat_ext, mat_ext)
+        _extra = R.material_note(mat_ext)
+        slab("sheathing_ext", f"Наружная обшивка {_mn} {th:g} мм", th, -th_ext,
              (z_bot + z_top) / 2, H,
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
-             f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам")
+             f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам"
+             + (". " + _extra if _extra else ""))
+
+    # --- водовоздухозащитный слой (ветрозащита) ---
+    if on["windproof"] and ext:
+        _n_sheets = 1 if on["wall_sheathing_ext"] else 2
+        _where = ("по наружной защитной обшивке" if on["wall_sheathing_ext"]
+                  else "непосредственно по утеплителю")
+        slab("windproof", f"Водовоздухозащитный слой ({_n_sheets} сл.)", 2,
+             -(th_ext + 2 * MM), (z_bot + z_top) / 2, H,
+             f"9.3.2.8: при наружной обшивке из материалов на древесной основе или без "
+             f"обшивки слой обязателен. 9.3.2.9: {_where} — не менее {_n_sheets} сл.; "
+             f"материал проницаем для водяного пара (полиолефин, перфорированный "
+             f"полиэтилен), 9.3.2.10: паропроницаемость 0,61…5,0 мг/(Па·ч·м²). "
+             f"9.3.3.2: стыки герметично или внахлёст ≥100 мм, крепить скобками "
+             f"к каркасу или обрешётке. В модели показан условной толщиной 2 мм")
 
     # --- утеплитель в пустотах каркаса ---
     if on["wall_insulation"] if ext else on["interior_insulation"]:
@@ -229,7 +260,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     # --- облицовка по обрешётке с вентзазором ---
     if on["cladding"] and ext:
         gap = R.CLEARANCES["masonry_veneer_gap_recommended"] * MM   # 38 мм
-        base = R.sheathing_min_thickness(sp, "plywood") * MM if on["wall_sheathing_ext"] else 0.0
+        base = th_ext + (2 * MM if on["windproof"] else 0.0)
         bt, bh = (19, 38)
         for u in wall["stud_axes"]:
             c = -(base + gap / 2)

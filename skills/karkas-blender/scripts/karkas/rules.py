@@ -269,15 +269,35 @@ T_B14 = {
 }
 
 # Таблица 6-2 — минимальная толщина чёрного пола, мм
-T6_2 = {400: {"plywood": 16.0, "osb": 16.0, "csp": 16.0, "dsp": 16.0, "lumber": 16.0, "gvl": 30.0},
-        500: {"plywood": 16.0, "osb": 19.0, "csp": 16.0, "dsp": 19.0, "lumber": 19.0, "gvl": 36.0},
-        600: {"plywood": 18.0, "osb": 26.0, "csp": 18.0, "dsp": 26.0, "lumber": 19.0, "gvl": 36.0}}
+T6_2 = {400: {"plywood": 16.0, "csp": 16.0, "dsp": 16.0, "lumber": 16.0, "gvl": 30.0},
+        500: {"plywood": 16.0, "csp": 16.0, "dsp": 19.0, "lumber": 19.0, "gvl": 36.0},
+        600: {"plywood": 18.0, "csp": 18.0, "dsp": 26.0, "lumber": 19.0, "gvl": 36.0}}
 
 # Таблица 7-3 — минимальная толщина обшивки стен/подшивки потолка, мм
 T7_3 = {400: {"gkl": 10.0, "gvl": 10.0, "lumber": 18.0, "dvp": 6.0, "plywood": 6.0, "csp": 10.0,
               "rigid_insulation": 25.0},
         600: {"gkl": 12.5, "gvl": 12.5, "lumber": 18.0, "dvp": 7.5, "plywood": 8.0, "csp": 12.0,
               "rigid_insulation": 25.0}}
+
+# ОСП (OSB) в СП 31-105-2002 НЕТ — ни в табл. 7-3, ни в табл. 8-6, ни в перечне 9.3.2.2.
+# Свод 2002 года знает фанеру, ДВП, ДСП, ЦСП, ГКЛ, ГВЛ и пиломатериалы. Толщины для ОСП
+# приняты по аналогии с фанерой — это НЕ норматив. Когда появится действующий свод,
+# где ОСП есть, задать её собственной строкой в таблицах и убрать отсюда.
+MATERIAL_ALIASES = {"osb": "plywood"}
+MATERIALS_NOT_IN_SP = {"osb": "ОСП (OSB) в СП 31-105-2002 не упоминается; толщина принята "
+                              "по аналогии с фанерой (табл. 7-3/8-6). Это не норматив — "
+                              "проверьте по действующему своду"}
+
+
+def resolve_material(material: str) -> str:
+    """Материал -> имя строки в таблицах СП (для тех, кого в СП нет)."""
+    return MATERIAL_ALIASES.get(material, material)
+
+
+def material_note(material: str) -> str:
+    """Предупреждение, если материала нет в СП 31-105-2002; иначе пустая строка."""
+    return MATERIALS_NOT_IN_SP.get(material, "")
+
 
 # Таблица 8-6 — минимальная толщина кровельного настила, мм
 T8_6 = {300: {"plywood": 7.5, "lumber": 17.0},
@@ -508,15 +528,15 @@ def check_stud(section: str, spacing_mm: int, free_height_m: float,
 
 def subfloor_min_thickness(joist_spacing_mm: int, material: str = "plywood") -> float:
     key = 600 if joist_spacing_mm > 500 else (500 if joist_spacing_mm > 400 else 400)
-    return T6_2[key][material]
+    return T6_2[key][resolve_material(material)]
 
 
 def sheathing_min_thickness(stud_spacing_mm: int, material: str = "plywood") -> float:
-    return T7_3[600 if stud_spacing_mm > 400 else 400][material]
+    return T7_3[600 if stud_spacing_mm > 400 else 400][resolve_material(material)]
 
 
 def roof_deck_min_thickness(rafter_spacing_mm: int, material: str = "plywood") -> float:
-    return T8_6[_spacing_from(rafter_spacing_mm)][material]
+    return T8_6[_spacing_from(rafter_spacing_mm)][resolve_material(material)]
 
 
 def _spacing_from(mm: int) -> int:

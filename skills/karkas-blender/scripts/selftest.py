@@ -56,7 +56,8 @@ true(not R.check_stud("38x64", 600, 2.4, "external", "attic")[0],
      "7-1: 38x64 допускается только при шаге ≤400")
 
 # --- прочие таблицы ---
-eq(R.subfloor_min_thickness(600, "osb"), 26.0, "6-2 ДСП при шаге 600")
+eq(R.subfloor_min_thickness(600, "dsp"), 26.0, "6-2 ДСП при шаге 600")
+eq(R.subfloor_min_thickness(600, "osb"), 18.0, "6-2: ОСП в таблице нет, считается по фанере")
 eq(R.sheathing_min_thickness(400, "gkl"), 10.0, "7-3 ГКЛ при шаге 400")
 eq(R.roof_deck_min_thickness(600, "lumber"), 19.0, "8-6 пиломатериал при шаге 600")
 eq(R.foundation(3)["ext_mm"], 450, "5-1 лента, 3 этажа")
@@ -275,6 +276,29 @@ for k in ("sheathing_ext", "sheathing_int", "insulation", "vapour", "cladding",
     true(k in lk, f"слой {k} не построен при layers='all'")
 true(any("теплотехнич" in f[2] and f[0] == "WARN" for f in lay.findings),
      "нет предупреждения, что толщина утеплителя требует расчёта")
+# 9.3.2.8: ветрозащита и материал наружной обшивки
+_base = {"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140"}
+_osb = build_house({**_base, "layers": {"wall_insulation": True,
+                                        "wall_sheathing_ext": True}})
+true(any(f[0] == "WARN" and "водовоздухозащитный" in f[1] for f in _osb.findings),
+     "обшивка ОСП без ветрозащиты — должно быть ! по 9.3.2.8")
+true(any(f[0] == "WARN" and "ОСП" in f[2] for f in _osb.findings),
+     "ОСП нет в СП 31-105-2002 — это должно быть сказано явно")
+_bare = build_house({**_base, "layers": {"wall_insulation": True}})
+true(any(f[0] == "WARN" and "обшивки нет" in f[2] for f in _bare.findings),
+     "без наружной обшивки ветрозащита обязательна по 9.3.2.8 — нет !")
+_wp = build_house({**_base, "layers": {"wall_insulation": True, "windproof": True,
+                                       "wall_sheathing_ext": True}})
+true(not any("водовоздухозащитный" in f[1] and f[0] == "WARN" for f in _wp.findings),
+     "ветрозащита включена, а ! всё равно выдан")
+true(any(m.kind == "windproof" for m in _wp.members), "слой windproof не построен")
+_csp = build_house({**_base, "layers": {"wall_insulation": True, "wall_sheathing_ext": True,
+                                        "sheathing_ext_material": "csp"}})
+true(not any("водовоздухозащитный" in f[1] and f[0] == "WARN" for f in _csp.findings),
+     "ЦСП не на древесной основе — ! по 9.3.2.8 лишний")
+eq(R.sheathing_min_thickness(600, "osb"), R.sheathing_min_thickness(600, "plywood"),
+   "ОСП пока считается по строке фанеры (в СП 31-105-2002 ОСП нет)")
+
 # 7.2.12: перегородка не должна приходить в проём несущей стены
 _win = {"wall": "W", "u": 2.2, "width": 1.2, "height": 1.5, "sill": 0.8, "type": "window"}
 _hit = build_house({"plan": {"length": 6.0, "width": 6.0}, "openings": [_win],

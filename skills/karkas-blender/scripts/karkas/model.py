@@ -1444,8 +1444,41 @@ def build_house(user_spec: dict | None = None) -> Result:
     res.ok("обшивки",
            f"табл. 7-3 при шаге стоек {sp} мм: ГКЛ/ГВЛ ≥{sh_gkl} мм, фанера ≥{sh_ply} мм, "
            f"пиломатериал ≥18 мм. Все края листов — над опорами (7.3.5.3)")
-    # --- утеплитель стен ---
+    # --- наружная обшивка и водовоздухозащитный слой ---
     _on = layers.resolve(spec)
+    _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
+    _mat = _lay0.get("sheathing_ext_material", layers.DEFAULT_SHEATHING_EXT)
+    if _on["wall_sheathing_ext"]:
+        _mn = layers.MATERIAL_NAMES.get(_mat, _mat)
+        _th = max(R.sheathing_min_thickness(sp, _mat), 9.5)
+        res.ok("обшивка наружная",
+               f"{_mn} ≥{_th:g} мм при шаге стоек {sp} мм (табл. 7-3); под облицовку "
+               f"плиты на основе древесины ≥8 мм, пиломатериалы ≥16 мм (10.4.4.2). "
+               f"Стыки заполнить герметиком, пиломатериалы — в шпунт (9.3.2.7)")
+        _note = R.material_note(_mat)
+        if _note:
+            res.warn("обшивка наружная/материал", _note)
+    if _on["windproof"]:
+        res.ok("водовоздухозащитный слой",
+               "9.3.2.9: по наружной обшивке — ≥1 слоя (допускается пергамин), "
+               "непосредственно по утеплителю — ≥2 слоёв; материал с низкой водо- и "
+               "воздухопроницаемостью, но проницаемый для водяного пара. "
+               "9.3.2.10: собственная паропроницаемость 0,61…5,0 мг/(Па·ч·м²). "
+               "9.3.3.2: стыки герметично или внахлёст ≥100 мм, крепление скобками")
+    elif _on["wall_insulation"]:
+        if not _on["wall_sheathing_ext"]:
+            res.warn("водовоздухозащитный слой",
+                     "9.3.2.8: наружной защитной обшивки нет — водовоздухозащитный слой "
+                     "обязателен, укладывается прямо по утеплителю в ≥2 слоя (9.3.2.9). "
+                     "Включите layers.windproof")
+        elif _mat in layers.WOOD_BASED:
+            res.warn("водовоздухозащитный слой",
+                     f"9.3.2.8: наружная обшивка из материала на древесной основе "
+                     f"({layers.MATERIAL_NAMES.get(_mat, _mat)}) — водовоздухозащитный слой "
+                     f"обязателен, ≥1 слоя по её поверхности (9.3.2.9). "
+                     f"Включите layers.windproof")
+
+    # --- утеплитель стен ---
     if _on["wall_insulation"]:
         _d_mm = eh
         _lay = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
