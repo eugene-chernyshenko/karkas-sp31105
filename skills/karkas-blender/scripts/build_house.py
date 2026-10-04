@@ -45,6 +45,8 @@ def parse_args():
     p.add_argument("--open", action="store_true",
                    help="открыть результат в Blender GUI, если он ещё не открыт "
                         "(дальше файл перечитывается сам аддоном karkas_autoreload)")
+    p.add_argument("--hide", action="append", default=[],
+                   help="выключить слой: фундамент, крыша, перекрытие, стены, внутренние")
     p.add_argument("--strict", action="store_true",
                    help="завершиться с кодом 1 при любой ошибке соответствия СП")
     return p.parse_args(argv_after_dashdash())
@@ -147,6 +149,8 @@ def main():
     a = parse_args()
     spec = json.load(open(resolve_spec(a.spec), encoding="utf-8")) if a.spec else {}
     spec = apply_overrides(spec, a.set)
+    if a.hide:
+        spec["hidden"] = list(spec.get("hidden") or []) + a.hide
 
     res = build_house(spec)
     files = write_outputs(res, a.out)
@@ -165,9 +169,11 @@ def main():
         else:
             from karkas import build as kb
             kb.clear_scene()
-            built = kb.build(res)
+            built = kb.build(res, hidden=spec.get("hidden"))
             objs = built["objects"]
             print(f"\nпостроено объектов: {len(objs)}")
+            if built["hidden"]:
+                print("слои выключены: " + ", ".join(built["hidden"]))
             if not a.no_save:
                 import bpy
                 blend = os.path.abspath(a.out + ".blend")
@@ -182,7 +188,8 @@ def main():
                     for o in list(bpy.data.objects):
                         if o.type in {"CAMERA", "LIGHT"}:
                             bpy.data.objects.remove(o, do_unlink=True)
-                    kb.setup_scene(objs, view=view, resolution=(w, h))
+                    kb.setup_scene(kb.visible_objects(objs), view=view,
+                                   resolution=(w, h))
                     png = os.path.abspath(f"{a.out}_{view}.png")
                     kb.render(png, samples=a.samples)
                     print(f"записано: {png}")

@@ -1,6 +1,8 @@
 """Построение каркаса в Blender. Требует bpy (запускать внутри Blender)."""
 from __future__ import annotations
 
+import sys
+
 import bpy
 import bmesh
 from mathutils import Matrix, Vector
@@ -62,6 +64,63 @@ def _material(kind: str):
             mat.blend_method = "BLEND"
     mat.diffuse_color = col
     return mat
+
+
+# Псевдонимы для spec["hidden"] — чем можно назвать слой, чтобы его выключить.
+# Значение ищется как подстрока в имени коллекции (без учёта регистра).
+HIDE_ALIASES = {
+    "фундамент": "Фундамент",       "foundation": "Фундамент",
+    "перекрытие": "Перекрытие",     "floor": "Перекрытие",
+    "стены": "Стены",               "walls": "Стены",
+    "внутренние": "Внутренние",     "interior": "Внутренние",
+    "крыша": "Крыша",               "roof": "Крыша",
+}
+
+
+def hide_collections(names, *, viewport=True, render=True) -> list[str]:
+    """Выключает слои (коллекции) по именам или псевдонимам из HIDE_ALIASES.
+
+    Гасит и галочку в View Layer (exclude), и иконку монитора (hide_viewport),
+    и видимость в рендере. Состояние сохраняется в .blend.
+    """
+    if not names:
+        return []
+    requested = {}
+    for n in names:
+        key = str(n).strip()
+        requested[HIDE_ALIASES.get(key.lower(), key).lower()] = key
+    hidden, matched = [], set()
+    for col in bpy.data.collections:
+        hit = [n for n in requested if n in col.name.lower()]
+        if not hit:
+            continue
+        matched.update(hit)
+        if viewport:
+            col.hide_viewport = True
+        if render:
+            col.hide_render = True
+        hidden.append(col.name)
+    for vl in bpy.context.scene.view_layers:
+        for lc in vl.layer_collection.children:
+            if lc.name in hidden:
+                lc.exclude = True
+    for n in sorted(set(requested) - matched):
+        print(f"[!] слой '{requested[n]}' не найден — выключать нечего. "
+              f"Известные псевдонимы: {', '.join(sorted(set(HIDE_ALIASES)))}",
+              file=sys.stderr)
+    return sorted(hidden)
+
+
+def visible_objects(objs) -> list:
+    """Объекты из невыключенных слоёв — то, что реально попадёт в рендер.
+
+    Нужно для кадрирования камеры: иначе она охватывает и скрытую крышу.
+    """
+    off = {c.name for c in bpy.data.collections if c.hide_render or c.hide_viewport}
+    if not off:
+        return list(objs)
+    kept = [o for o in objs if not any(c.name in off for c in o.users_collection)]
+    return kept or list(objs)
 
 
 def _collection(name: str, parent=None):
@@ -152,7 +211,7 @@ def add_foundation(m: Member, collection) -> list:
     return objs
 
 
-def build(res: Result, *, apply_scale: bool = True) -> dict:
+def build(res: Result, *, apply_scale: bool = True, hidden=None) -> dict:
     """Создаёт объекты Blender из результата build_house()."""
     cols: dict[str, bpy.types.Collection] = {}
     created = []
@@ -173,7 +232,8 @@ def build(res: Result, *, apply_scale: bool = True) -> dict:
             bpy.context.view_layer.objects.active = created[0]
             bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         bpy.ops.object.select_all(action="DESELECT")
-    return {"objects": created, "collections": cols}
+    off = hide_collections(hidden)
+    return {"objects": created, "collections": cols, "hidden": off}
 
 
 # --------------------------------------------------------------------------
