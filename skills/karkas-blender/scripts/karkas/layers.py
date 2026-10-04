@@ -35,6 +35,10 @@ DEFAULT_ATTIC_INSULATION_MM = 250
 # стоек 600; СП размеры плит не нормирует. 0 — не резать, заполнять ячейку целиком.
 DEFAULT_PLATE_MM = 1000
 
+# Толщина одной плиты утеплителя, мм. Глубина каркаса набирается слоями по
+# столько, швы слоёв перекрываются. 0 — один кусок на всю глубину.
+DEFAULT_LAYER_MM = 50
+
 # Утеплитель — в своём слое, а не в слое стены/крыши: иначе выключатель крыши
 # прячет и утеплитель чердачного перекрытия, а посмотреть на один утеплитель
 # отдельно от каркаса нельзя.
@@ -86,6 +90,24 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
             cur = max(cur, p2)
         if z1 - cur > 0.01:
             out.append((a, b, cur, z1))
+    return out
+
+
+def _depth_layers(depth: float, layer: float) -> list[tuple[float, float]]:
+    """Слои утеплителя по глубине каркаса, от наружной грани внутрь.
+
+    Остаток тоньше 10 мм уходит в последний слой, чтобы не плодить фольгу.
+    """
+    if layer <= 0 or depth <= layer + 0.005:
+        return [(0.0, depth)]
+    out, z = [], 0.0
+    while depth - z > layer + 0.005:
+        out.append((z, z + layer))
+        z += layer
+    if depth - z < 0.01 and out:
+        out[-1] = (out[-1][0], depth)
+    else:
+        out.append((z, depth))
     return out
 
 
@@ -151,30 +173,38 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         lay = spec.get("layers")
         plate = (float(lay.get("insulation_plate_mm", DEFAULT_PLATE_MM))
                  if isinstance(lay, dict) else DEFAULT_PLATE_MM) * MM
-        label = (f"Утеплитель {int(depth * 1000)} мм" if ext
-                 else f"Звукоизоляция {int(depth * 1000)} мм")
+        label = "Утеплитель" if ext else "Звукоизоляция"
         note = ("9.2.2.2 «а»: в пространстве между стойками, обвязками и обшивками; "
                 "λ ≤0,10 Вт/(м·°C) (9.2.2.1). Толщина = глубине каркаса, "
                 "достаточность проверяется теплотехническим расчётом (9.2.1.2)" if ext else
                 "7.5.2: звукоизоляция стен и перегородок внутри дома — по заданию на "
                 "проектирование. Само заполнение ячеек СП не нормирует: табл. 7-6 даёт "
                 "прибавку Iв только для обшивок и крепления к гибким профилям")
+        layer = (float(lay.get("insulation_layer_mm", DEFAULT_LAYER_MM))
+                 if isinstance(lay, dict) else DEFAULT_LAYER_MM) * MM
         cav = _cavities(wall)
-        # Швы смежных ячеек не выводят в один уровень: в каждой второй ячейке
-        # первая плита — в половину высоты, дальше целые. СП этого не требует,
-        # но иначе стык проходит сквозной линией по всей стене.
-        bays = sorted({round(c[0], 4) for c in cav})
-        half = plate / 2 if on["insulation_stagger"] else 0.0
+        dl = _depth_layers(depth, layer)
+        # Швы не выводят в один уровень: каждый следующий слой по глубине сдвинут
+        # на долю плиты, и соседние ячейки — ещё на половину. Шов слоя приходится
+        # на целое полотно соседнего, то есть перекрывается внахлёст.
+        bays = sorted({c[0] for c in cav})
         for u1, u2, a, b in cav:
-            first = half if bays.index(round(u1, 4)) % 2 else 0.0
-            for z1, z2 in _plates(a, b, plate, first):
-                zc, h = (z1 + z2) / 2, z2 - z1
-                c = depth / 2
-                p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
-                p2 = (o[0] + d[0] * u2 - n[0] * c, o[1] + d[1] * u2 - n[1] * c, zc)
-                add(Member("insulation", label,
-                           (int(depth * 1000), int(round(h * 1000))), p1, p2, n,
-                           G_INSULATION, note))
+            bay = bays.index(u1) % 2
+            for k, (d0, d1) in enumerate(dl):
+                if on["insulation_stagger"]:
+                    off = (plate * k / len(dl) + (plate / 2 if bay else 0.0)) % plate
+                    first = off if off > 0.05 else 0.0
+                else:
+                    first = 0.0
+                t_mm = int(round((d1 - d0) * 1000))
+                c = (d0 + d1) / 2
+                for z1, z2 in _plates(a, b, plate, first):
+                    zc, h = (z1 + z2) / 2, z2 - z1
+                    p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
+                    p2 = (o[0] + d[0] * u2 - n[0] * c, o[1] + d[1] * u2 - n[1] * c, zc)
+                    add(Member("insulation", f"{label} {t_mm} мм",
+                               (t_mm, int(round(h * 1000))), p1, p2, n,
+                               G_INSULATION, note))
 
     # --- пароизоляция с тёплой стороны ---
     if on["vapour_barrier"] and ext:
