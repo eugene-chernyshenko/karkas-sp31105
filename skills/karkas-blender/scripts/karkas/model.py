@@ -129,6 +129,7 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                length: float, z_base: float, stud: str, spacing_mm: int,
                height: float, group: str, openings: list[dict] | None = None,
                top_plates: int = 2, bearing: bool = True, bottom_plate: bool = True,
+               plate_spans: list | None = None, plate_gaps: list | None = None,
                corner_nailers: tuple[bool, bool] = (False, False),
                load_case: str = "attic", wall_kind: str = "external",
                snow_kpa: float = 1.5, sheathed: bool = True,
@@ -165,12 +166,27 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                    P(0, mid, z_base + 0.019), P(length, mid, z_base + 0.019), (0, 0, 1),
                    group, "7.2.6/7.2.7: 1 доска, толщина ≥38, ширина ≥ высоты сечения стойки"))
 
-    # --- верхняя обвязка (2 доски в несущих стенах, 7.2.6) ---
+    # --- верхняя обвязка (2 доски в несущих стенах, 7.2.6; нахлёст в углах по 7.2.10) ---
     for i in range(top_plates):
         z = z_stud_top + 0.019 + 0.038 * i
-        add(Member("plate", f"Верхняя обвязка {i + 1} ({name})", (38, h_mm),
-                   P(0, mid, z), P(length, mid, z), (0, 0, 1), group,
-                   "7.2.6: верхняя обвязка из 2 досок; стыки верхней доски смещены на шаг стоек"))
+        a, b = (plate_spans[i] if plate_spans and i < len(plate_spans) else (0.0, length))
+        gaps = sorted(plate_gaps[i]) if plate_gaps and i < len(plate_gaps) else []
+        note = ("7.2.6: нижняя доска верхней обвязки, в углах и пересечениях — встык (7.2.10); "
+                "стыки по длине располагаются над стойками (7.2.9)" if i == 0 else
+                "7.2.10: верхняя доска верхней обвязки перекрывает стыки нижних досок "
+                "в углах и пересечениях; стыки по длине смещены на один шаг стоек (7.2.9)")
+        segs, cur = [], a
+        for g1, g2 in gaps:
+            if g1 > cur:
+                segs.append((cur, min(g1, b)))
+            cur = max(cur, g2)
+        if cur < b:
+            segs.append((cur, b))
+        for s1, s2 in segs:
+            if s2 - s1 < 0.05:
+                continue
+            add(Member("plate", f"Верхняя обвязка {i + 1} ({name})", (38, h_mm),
+                       P(s1, mid, z), P(s2, mid, z), (0, 0, 1), group, note))
 
     # --- разметка проёмов ---
     blocked: list[tuple[float, float]] = []
@@ -1158,6 +1174,30 @@ def build_house(user_spec: dict | None = None) -> Result:
         ("W", (0.0, t_ext), (0, 1, 0), (-1, 0, 0), W - 2 * t_ext),
         ("E", (L, t_ext), (0, 1, 0), (1, 0, 0), W - 2 * t_ext),
     ]
+    # --- 7.2.10: раскладка верхних досок обвязки ---
+    # нижние доски стыкуются встык, верхние перекрывают эти стыки: в углах через проходят
+    # доски Y-стен, X-стены в верхнем слое отступают на толщину стены
+    _iw_bearing = [iw for iw in spec.get("interior_walls", []) if iw.get("bearing")]
+    _gaps: dict[str, list] = {"S": [], "N": [], "W": [], "E": []}
+    for iw in _iw_bearing:
+        ih = R.sec(iw.get("stud", spec["int_stud"]))[1] * MM
+        if iw["axis"] == "x":        # упирается в стены W и E
+            g = (iw["pos"] - t_ext, iw["pos"] - t_ext + ih)
+            _gaps["W"].append(g)
+            _gaps["E"].append(g)
+        else:                        # упирается в стены S и N
+            g = (iw["pos"], iw["pos"] + ih)
+            _gaps["S"].append(g)
+            _gaps["N"].append(g)
+
+    def _plate_layout(tag: str, wlen: float):
+        """(spans, gaps) для нижней и верхней доски верхней обвязки."""
+        if tag in ("S", "N"):
+            spans = [(0.0, wlen), (t_ext, wlen - t_ext)]
+        else:
+            spans = [(0.0, wlen), (-t_ext, wlen + t_ext)]
+        return spans, [[], list(_gaps[tag])]
+
     ops_by_wall: dict[str, list] = {}
     for op in spec.get("openings", []):
         ops_by_wall.setdefault(op["wall"], []).append(
@@ -1168,9 +1208,11 @@ def build_house(user_spec: dict | None = None) -> Result:
     opening_area = {}
     for tag, origin, d, n, wlen in wall_defs:
         ops = ops_by_wall.get(tag, [])
+        _spans, _pgaps = _plate_layout(tag, wlen)
         info = frame_wall(
             res, origin=origin, d=d, n=n, length=wlen, z_base=z_floor, stud=ext_stud,
             spacing_mm=sp, height=H, group="02_Стены_1", openings=ops, top_plates=2,
+            plate_spans=_spans, plate_gaps=_pgaps,
             bearing=True, corner_nailers=(tag in ("S", "N"), tag in ("S", "N")),
             load_case={"attic": "roof", "attic+1": "roof+1", "attic+2": "roof+2",
                        "attic+3": "roof+3"}[load_case],
@@ -1220,6 +1262,7 @@ def build_house(user_spec: dict | None = None) -> Result:
                               "header_depth": o.get("header_depth")}
                              for o in iw.get("openings", [])],
                    top_plates=2 if bearing else 1, bearing=bearing,
+                   plate_spans=([(0.0, wlen), (-t_ext, wlen + t_ext)] if bearing else None),
                    load_case="roof" if bearing else "attic", wall_kind="internal",
                    snow_kpa=snow, sheathed=bool(spec.get("sheathed", True)),
                    name=f"внутренняя {i}" + (" (несущая)" if bearing else " (перегородка)"))
@@ -1247,9 +1290,11 @@ def build_house(user_spec: dict | None = None) -> Result:
         res.levels[f"floor_{s}"] = z_fl
         tops = []
         for tag, origin, d, n, wlen in wall_defs:
+            _sp2, _pg2 = _plate_layout(tag, wlen)
             info = frame_wall(res, origin=origin, d=d, n=n, length=wlen, z_base=z_fl,
                               stud=ext_stud, spacing_mm=sp, height=H, group=f"0{s}b_Стены_{s}",
-                              openings=[], top_plates=2, bearing=True,
+                              openings=[], top_plates=2, plate_spans=_sp2, plate_gaps=_pg2,
+                              bearing=True,
                               corner_nailers=(tag in ("S", "N"), tag in ("S", "N")),
                               load_case="roof", wall_kind="external", snow_kpa=snow,
                               sheathed=bool(spec.get("sheathed", True)),
