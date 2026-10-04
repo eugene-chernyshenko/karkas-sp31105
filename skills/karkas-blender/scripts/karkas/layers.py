@@ -40,6 +40,10 @@ DEFAULT_PLATE_MM = 1000
 # столько, швы слоёв перекрываются. 0 — один кусок на всю глубину.
 DEFAULT_LAYER_MM = 50
 
+# Ходовой лист ОСП/ГКЛ, мм. Ширина взята кратной шагу стоек 600: по 7.3.5.3 все края
+# листов должны лежать над опорами, а 1250 при шаге 600 на стойку не попадает.
+SHEET_MM = (1200, 2500)
+
 MATERIAL_NAMES = {"osb": "ОСП", "plywood": "фанера", "lumber": "пиломатериал",
                   "dvp": "ДВП", "csp": "ЦСП", "gkl": "ГКЛ", "gvl": "ГВЛ"}
 
@@ -100,6 +104,27 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
             cur = max(cur, p2)
         if z1 - cur > 0.01:
             out.append((a, b, cur, z1))
+    return out
+
+
+def _sheets(rect, sw: float, sh: float, u0: float, z0: float, stagger: float = 0.0):
+    """Режет прямоугольник стены на листы sw x sh, ряды вразбежку.
+
+    Сетка глобальная для всей стены, поэтому куски по разные стороны проёма
+    остаются в одной раскладке, а не начинают раскрой заново.
+    """
+    import math
+    a, b, c, e = rect
+    out = []
+    for k in range(math.floor((c - z0) / sh), math.ceil((e - z0) / sh)):
+        rz1, rz2 = max(c, z0 + k * sh), min(e, z0 + (k + 1) * sh)
+        if rz2 - rz1 < 1e-6:
+            continue
+        off = (k % 2) * stagger
+        for j in range(math.floor((a - u0 - off) / sw), math.ceil((b - u0 - off) / sw)):
+            ra, rb = max(a, u0 + off + j * sw), min(b, u0 + off + (j + 1) * sw)
+            if rb - ra > 1e-6:
+                out.append((ra, rb, rz1, rz2))
     return out
 
 
@@ -189,11 +214,15 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                      + (_th_int if on["wall_sheathing_int"] else 0.0)) if ext_through else 0.0
     add = res.members.append
 
+    _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
     _holes = [(op["u"], op["u"] + op["width"], z0 + op["sill"], z0 + op["head"])
               for op in wall.get("openings", [])]
 
+    _sheet = _lay0.get("sheet_mm", SHEET_MM)
+    _sw, _sh = float(_sheet[0]) * MM, float(_sheet[1]) * MM
+
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
-             wrap=False):
+             wrap=False, sheet=False):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
@@ -206,7 +235,11 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         c = offset + half
         lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
         u_a, u_b = inset - lap, (length or L) - inset + lap
-        for ra, rb, rz1, rz2 in _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes):
+        rects = _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes)
+        if sheet and _sw > 0 and _sh > 0:
+            rects = [r for rect in rects
+                     for r in _sheets(rect, _sw, _sh, 0.0, zc - h / 2, _sw / 2)]
+        for ra, rb, rz1, rz2 in rects:
             rzc, rh = (rz1 + rz2) / 2, rz2 - rz1
             p1 = (o[0] + d[0] * ra - n[0] * c, o[1] + d[1] * ra - n[1] * c, rzc)
             p2 = (o[0] + d[0] * rb - n[0] * c, o[1] + d[1] * rb - n[1] * c, rzc)
@@ -214,7 +247,6 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                        p1, p2, n, group, note))
 
     # --- наружная защитная обшивка каркаса ---
-    _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
     mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)
     th_ext = 0.0
     if on["wall_sheathing_ext"] and ext:
@@ -226,7 +258,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам"
-             + (". " + _extra if _extra else ""), wrap=True)
+             + (". " + _extra if _extra else ""), wrap=True, sheet=True)
 
     # --- водовоздухозащитный слой (ветрозащита) ---
     if on["windproof"] and ext:
@@ -296,10 +328,11 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3: ГКЛ/ГВЛ ≥{th:g} мм при шаге стоек {sp} мм; "
              f"винты с шагом ≤300 мм (табл. 7-4), края листов над опорами (7.3.5.3)",
-             inset=_corner_clear)
+             inset=_corner_clear, sheet=True)
         if not ext:
             slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, -th * MM,
-                 (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон")
+                 (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон",
+                 sheet=True)
 
     # --- облицовка по обрешётке с вентзазором ---
     if on["cladding"] and ext:

@@ -75,7 +75,7 @@ def write_outputs(res, out_prefix: str) -> dict:
     rows = bom(res.members)
     with open(out_prefix + "_bom.csv", "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["material", "name", "section", "length_m",
-                                          "count", "total_m", "volume_m3"])
+                                          "count", "total_m", "volume_m3", "area_m2"])
         w.writeheader()
         w.writerows(rows)
     with open(out_prefix + "_members.json", "w", encoding="utf-8") as f:

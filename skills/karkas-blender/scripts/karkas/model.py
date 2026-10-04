@@ -1458,6 +1458,19 @@ def build_house(user_spec: dict | None = None) -> Result:
         _note = R.material_note(_mat)
         if _note:
             res.warn("обшивка наружная/материал", _note)
+    if _on["wall_sheathing_ext"] or _on["wall_sheathing_int"]:
+        _sw = int(float((_lay0.get("sheet_mm") or layers.SHEET_MM)[0]))
+        if _sw % sp:
+            res.warn("обшивки/раскрой",
+                     f"7.3.5.3: все края листов должны лежать над опорами, а лист шириной "
+                     f"{_sw} мм при шаге стоек {sp} мм на стойку не попадает "
+                     f"({_sw} / {sp} = {_sw / sp:.2f}). Возьмите лист, кратный шагу, "
+                     f"или шаг, кратный листу (layers.sheet_mm)")
+        else:
+            res.ok("обшивки/раскрой",
+                   f"7.3.5.3: лист {_sw} мм кратен шагу стоек {sp} мм — вертикальные стыки "
+                   f"ложатся на стойки; ряды разложены вразбежку, со сдвигом на пол-листа")
+
     if _on["windproof"]:
         res.ok("водовоздухозащитный слой",
                "9.3.2.9: по наружной обшивке — ≥1 слоя (допускается пергамин), "
@@ -1516,7 +1529,10 @@ def build_house(user_spec: dict | None = None) -> Result:
 # --------------------------------------------------------------------------
 # Не пиломатериал, хотя и строится брусками по ячейкам каркаса, — в общий объём
 # доски и бруса такое мешать нельзя.
-MATERIAL = {"insulation": "утеплитель"}
+MATERIAL = {"insulation": "утеплитель",
+            "sheathing_ext": "лист", "sheathing_int": "лист",
+            "vapour": "плёнка", "windproof": "плёнка",
+            "cladding": "облицовка"}
 
 
 def bom(members: list[Member], material: str | None = None) -> list[dict]:
@@ -1535,15 +1551,19 @@ def bom(members: list[Member], material: str | None = None) -> list[dict]:
         key = (mat, m.label.split(" (")[0], m.sec_str, round(m.length, 2))
         e = acc.setdefault(key, {"material": mat, "name": key[1], "section": key[2],
                                  "length_m": key[3],
-                                 "count": 0, "total_m": 0.0, "volume_m3": 0.0})
+                                 "count": 0, "total_m": 0.0, "volume_m3": 0.0,
+                                 "area_m2": 0.0})
         e["count"] += 1
         e["total_m"] += m.length
         e["volume_m3"] += m.volume
+        e["area_m2"] += m.length * m.section[1] / 1000.0
+    _ord = {"пиломатериал": 0, "утеплитель": 1, "лист": 2, "облицовка": 3, "плёнка": 4}
     rows = sorted(acc.values(),
-                  key=lambda r: (r["material"] != "пиломатериал", -r["volume_m3"], r["name"]))
+                  key=lambda r: (_ord.get(r["material"], 9), -r["volume_m3"], r["name"]))
     for r in rows:
         r["total_m"] = round(r["total_m"], 2)
         r["volume_m3"] = round(r["volume_m3"], 4)
+        r["area_m2"] = round(r["area_m2"], 3)
     return rows
 
 
@@ -1566,18 +1586,22 @@ def report(res: Result) -> str:
     for k, v in res.levels.items():
         lines.append(f"  {k}: {v:.3f}")
     lines.append("")
-    for title, mat in (("ВЕДОМОСТЬ ПИЛОМАТЕРИАЛОВ", "пиломатериал"),
-                       ("УТЕПЛИТЕЛЬ (по ячейкам каркаса)", "утеплитель")):
+    for title, mat, unit in (("ВЕДОМОСТЬ ПИЛОМАТЕРИАЛОВ", "пиломатериал", "м³"),
+                             ("УТЕПЛИТЕЛЬ (по ячейкам каркаса)", "утеплитель", "м³"),
+                             ("ЛИСТОВЫЕ МАТЕРИАЛЫ (раскрой)", "лист", "м²"),
+                             ("ОБЛИЦОВКА", "облицовка", "м²"),
+                             ("ПЛЁНКИ И МЕМБРАНЫ", "плёнка", "м²")):
         rows = bom(res.members, mat)
         if not rows:
             continue
-        total_v = sum(r["volume_m3"] for r in rows)
+        key = "volume_m3" if unit == "м³" else "area_m2"
+        total = sum(r[key] for r in rows)
         total_n = sum(r["count"] for r in rows)
-        lines.append(f"{title} — {total_n} шт, {total_v:.3f} м³")
+        lines.append(f"{title} — {total_n} шт, {total:.3f} {unit}")
         lines.append("-" * 72)
-        lines.append(f"{'Наименование':<46}{'Сечение':>9}{'Длина':>7}{'Шт':>5}{'м³':>8}")
+        lines.append(f"{'Наименование':<46}{'Сечение':>9}{'Длина':>7}{'Шт':>5}{unit:>8}")
         for r in rows:
             lines.append(f"{r['name'][:45]:<46}{r['section']:>9}{r['length_m']:>7.2f}"
-                         f"{r['count']:>5}{r['volume_m3']:>8.3f}")
+                         f"{r['count']:>5}{r[key]:>8.3f}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
