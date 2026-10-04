@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Самопроверка: таблицы СП + генератор. Запуск: python3 scripts/selftest.py"""
 from __future__ import annotations
-import os, sys
+import collections, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from karkas import rules as R                      # noqa: E402
@@ -309,6 +309,25 @@ for _m in _gk.members:
         true("12,5" in _m.label or "12.5" in _m.label,
              f"в подписи должна стоять нормативная толщина, а не округлённая: {_m.label}")
         break
+
+# ГКЛ: свой лист 1200x2500 стоймя, без вразбежки (6.4.6 — только про чёрный пол)
+_gi = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                   "layers": {"wall_sheathing_int": True}})
+_gs = [m for m in _gi.members if m.kind == "sheathing_int"
+       and abs(m.p1[1] - m.p2[1]) < 1e-6 and 0.1 < m.p1[1] < 0.2]
+true(max(m.section[1] for m in _gs) > 2000,
+     "ГКЛ должен вешаться стоймя: нет куска выше 2000 мм")
+true(all(m.length <= 1.2 + 1e-6 for m in _gs),
+     f"кусок ГКЛ шире листа 1200 мм: {max(m.length for m in _gs):.3f} м")
+_gr = collections.defaultdict(set)
+for m in _gs:
+    _gr[round(m.p1[2] - m.section[1] / 2000.0, 3)].add(round(min(m.p1[0], m.p2[0]), 3))
+_gk2 = sorted(_gr)
+true(all(_gr[a] <= _gr[b] or _gr[b] <= _gr[a] for a, b in zip(_gk2, _gk2[1:])),
+     f"ряды ГКЛ разложены вразбежку, хотя СП этого не требует: "
+     f"{[sorted(_gr[k])[:3] for k in _gk2]}")
+true(any("6.4.6" in f[2] for f in _gi.findings),
+     "в отчёте должно быть сказано, что вразбежку для ГКЛ СП не требует")
 
 # каждый слой оболочки — в своей коллекции, иначе его не выключить
 _col = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",

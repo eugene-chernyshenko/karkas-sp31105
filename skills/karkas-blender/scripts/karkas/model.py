@@ -1458,7 +1458,16 @@ def build_house(user_spec: dict | None = None) -> Result:
         _note = R.material_note(_mat)
         if _note:
             res.warn("обшивка наружная/материал", _note)
-    if _on["wall_sheathing_ext"] or _on["wall_sheathing_int"]:
+    if _on["wall_sheathing_int"]:
+        _im = sorted(float(v) for v in (_lay0.get("sheet_int_mm") or layers.SHEET_INT_MM))
+        _il = _lay0.get("sheet_int_lay", layers.SHEET_INT_LAY)
+        _iw = int(_im[0] if _il == "v" else _im[1])
+        res.ok("обшивки/внутренняя",
+               f"ГКЛ лист {_iw}x{int(_im[1] if _il == 'v' else _im[0])} мм "
+               f"({'стоймя' if _il == 'v' else 'плашмя'}); 7.3.5.3 — края над опорами. "
+               f"Вразбежку класть СП не требует: 6.4.6 про вразбежку относится только "
+               f"к чёрному полу, в 7.3.5 такого требования нет")
+    if _on["wall_sheathing_ext"]:
         _sm = sorted(float(v) for v in (_lay0.get("sheet_mm") or layers.SHEET_MM))
         _lay = _lay0.get("sheet_lay", layers.SHEET_LAY)
         _sw = int(_sm[0] if _lay == "v" else _sm[1])

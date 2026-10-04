@@ -49,6 +49,12 @@ SHEET_MM = (1200, 2400)
 # Как кладут лист: "h" — длинной стороной горизонтально (так кладут обычно),
 # "v" — вертикально.
 SHEET_LAY = "h"
+# ГКЛ ходит листом 1200x2500 (а также 2700 и 3000) и вешается стоймя. Вразбежку
+# его класть СП не требует: 6.4.6 про вразбежку — только о чёрном поле, а для
+# обшивок стен 7.3.5.3 требует лишь, чтобы края лежали над опорами.
+SHEET_INT_MM = (1200, 2500)
+SHEET_INT_LAY = "v"
+SHEET_INT_STAGGER = False
 # Кусок обшивки короче этого не выделяют в отдельный лист, м.
 MIN_PIECE = 0.30
 
@@ -283,11 +289,18 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         _sw, _sh = _sheet[0] * MM, _sheet[1] * MM
     else:
         _sw, _sh = _sheet[1] * MM, _sheet[0] * MM
+    _si = sorted(float(v) for v in _lay0.get("sheet_int_mm", SHEET_INT_MM))
+    if _lay0.get("sheet_int_lay", SHEET_INT_LAY) == "v":
+        _siw, _sih = _si[0] * MM, _si[1] * MM
+    else:
+        _siw, _sih = _si[1] * MM, _si[0] * MM
+    _si_stag = bool(_lay0.get("sheet_int_stagger", SHEET_INT_STAGGER))
     _roll = _lay0.get("roll_mm", ROLL_MM)
     _rw, _rlap = float(_roll[0]) * MM, float(_roll[1]) * MM
 
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
-             wrap=False, sheet=False, roll=False, col=None, mat=None):
+             wrap=False, sheet=False, roll=False, col=None, mat=None,
+             cfg=None):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
@@ -301,20 +314,21 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
         u_a, u_b = inset - lap, (length or L) - inset + lap
         rects = _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes)
-        if sheet and _sw > 0 and _sh > 0:
+        sw, sh, stag = cfg or (_sw, _sh, True)
+        if sheet and sw > 0 and sh > 0:
             import math
             z_lo, z_hi = zc - h / 2, zc + h / 2
-            nrow = max(1, math.ceil((z_hi - z_lo) / _sh - 1e-9))
+            nrow = max(1, math.ceil((z_hi - z_lo) / sh - 1e-9))
             bands = {}
             for ra, rb, rz1, rz2 in rects:
                 for k in range(nrow):
-                    ba = z_lo + k * _sh
-                    bb = min(z_lo + (k + 1) * _sh, z_hi)
+                    ba = z_lo + k * sh
+                    bb = min(z_lo + (k + 1) * sh, z_hi)
                     ca, cb = max(rz1, ba), min(rz2, bb)
                     if cb - ca <= 1e-6:
                         continue
-                    edges = _cols(ra, rb, _sw, wall["stud_axes"],
-                                  0.5 if k % 2 else 1.0)
+                    edges = _cols(ra, rb, sw, wall["stud_axes"],
+                                  0.5 if (stag and k % 2) else 1.0)
                     for p, q in zip(edges, edges[1:]):
                         xa, xb = max(ra, p), min(rb, q)
                         if xb - xa > 1e-6:
@@ -331,7 +345,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                     a1, b1 = band[i]
                     if abs(a1 - b0) < 1e-6 \
                             and min(b0 - a0, b1 - a1) < MIN_PIECE \
-                            and b1 - a0 <= _sw + 1e-9:
+                            and b1 - a0 <= sw + 1e-9:
                         band[i - 1][1] = b1
                         del band[i]
                     else:
@@ -449,11 +463,12 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3: ГКЛ/ГВЛ ≥{th:g} мм при шаге стоек {sp} мм; "
              f"винты с шагом ≤300 мм (табл. 7-4), края листов над опорами (7.3.5.3)",
-             inset=_corner_clear, sheet=True, col=G_SHEATHING_INT)
+             inset=_corner_clear, sheet=True, col=G_SHEATHING_INT,
+             cfg=(_siw, _sih, _si_stag))
         if not ext:
             slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, -th * MM,
                  (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон",
-                 sheet=True, col=G_SHEATHING_INT)
+                 sheet=True, col=G_SHEATHING_INT, cfg=(_siw, _sih, _si_stag))
 
     # --- облицовка по обрешётке с вентзазором ---
     if on["cladding"] and ext:
