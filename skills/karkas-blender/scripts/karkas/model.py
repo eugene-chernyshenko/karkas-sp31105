@@ -1545,7 +1545,7 @@ def build_house(user_spec: dict | None = None) -> Result:
 # доски и бруса такое мешать нельзя.
 MATERIAL = {"insulation": "утеплитель",
             "sheathing_ext": "лист", "sheathing_int": "лист",
-            "vapour": "плёнка", "windproof": "плёнка",
+            "vapour": "плёнка", "windproof": "плёнка", "tape": "лента",
             "cladding": "облицовка"}
 
 
@@ -1571,7 +1571,8 @@ def bom(members: list[Member], material: str | None = None) -> list[dict]:
         e["total_m"] += m.length
         e["volume_m3"] += m.volume
         e["area_m2"] += m.length * m.section[1] / 1000.0
-    _ord = {"пиломатериал": 0, "утеплитель": 1, "лист": 2, "облицовка": 3, "плёнка": 4}
+    _ord = {"пиломатериал": 0, "утеплитель": 1, "лист": 2, "облицовка": 3,
+            "плёнка": 4, "лента": 5}
     rows = sorted(acc.values(),
                   key=lambda r: (_ord.get(r["material"], 9), -r["volume_m3"], r["name"]))
     for r in rows:
@@ -1581,7 +1582,115 @@ def bom(members: list[Member], material: str | None = None) -> list[dict]:
     return rows
 
 
-def report(res: Result) -> str:
+def fasteners(res: Result, spec: dict) -> list[dict]:
+    """Ведомость крепежа по табл. 7-2, 7-5, 8-1 и п. 6.2.8.4.
+
+    Крепёж в модели не рисуется — только считается. Шаг скобок для плёнок
+    СП не нормирует (9.3.3.2 требует лишь крепления), взята практика 300 мм.
+    """
+    import math
+    acc: dict[tuple, dict] = {}
+
+    def add(name, size, n, note):
+        e = acc.setdefault((name, size), {"name": name, "size": size, "count": 0,
+                                          "note": note})
+        e["count"] += int(n)
+
+    ms = res.members
+    sp = int(res.picked.get("stud_spacing", 600))
+
+    # --- табл. 7-2 ---
+    t = R.T7_2["stud_to_plate"]
+    n_studs = sum(1 for m in ms if m.kind in ("stud", "cripple", "gable_stud"))
+    add("Гвоздь: стойка к обвязкам", f"{t['len']} мм", n_studs * t["n"] * t["ends"],
+        f"табл. 7-2: {t['n']} гвоздя на каждый конец ({t['ends']} конца), "
+        f"или 2 вкосую к нижней обвязке; стоек {n_studs}")
+
+    t = R.T7_2["stud_to_stud"]
+    paired = [m for m in ms if m.kind == "stud"
+              and ("опорная" in m.label or "крайняя" in m.label or "нашивка" in m.label)]
+    n = sum(math.ceil(m.length / (t["step"] / 1000.0)) + 1 for m in paired)
+    add("Гвоздь: стойки друг к другу", f"{t['len']} мм", n,
+        f"табл. 7-2: шаг ≤{t['step']} мм; сдвоенных стоек и нашивок {len(paired)}")
+
+    for key, kinds, lab in (("top_plate", ("plate",), "Верхняя обвязка"),
+                            ("bottom_plate", ("plate",), "Нижняя обвязка")):
+        t = R.T7_2[key]
+        pick = [m for m in ms if m.kind in kinds and lab.split()[0].lower() in m.label.lower()
+                and "Стены" in m.group]
+        n = sum(math.ceil(m.length / (t["step"] / 1000.0)) + 1 for m in pick)
+        if n:
+            add(f"Гвоздь: {lab.lower()}", f"{t['len']} мм", n,
+                f"табл. 7-2: {t['what']}, шаг ≤{t['step']} мм")
+
+    t = R.T7_2["interior_wall"]
+    iw = [m for m in ms if m.kind == "plate" and "Внутренние" in m.group
+          and "Нижняя" in m.label]
+    n = sum(math.ceil(m.length / (t["step"] / 1000.0)) + 1 for m in iw)
+    if n:
+        add("Гвоздь: внутренняя стена к перекрытию", f"{t['len']} мм", n,
+            f"табл. 7-2: {t['what']}, шаг ≤{t['step']} мм")
+
+    for grp, key in (("02_Стены_1", "header_bearing"), ("03_Внутренние_стены",
+                                                        "header_partition")):
+        t = R.T7_2[key]
+        hd = [m for m in ms if m.kind == "header" and m.group == grp]
+        if hd:
+            add("Гвоздь: перемычка к стойкам", f"{t['len']} мм",
+                len(hd) * t["n"] * t["ends"],
+                f"табл. 7-2: {t['what']}; перемычек {len(hd)}")
+
+    # --- табл. 7-5: обшивки ---
+    lay = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
+    for kind, mat, lab in (("sheathing_ext",
+                            lay.get("sheathing_ext_material", layers.DEFAULT_SHEATHING_EXT),
+                            "наружная обшивка"),
+                           ("sheathing_int", "gkl", "внутренняя обшивка")):
+        sheets = [m for m in ms if m.kind == kind]
+        if not sheets:
+            continue
+        f = R.sheathing_fastening(mat)
+        n = 0
+        for m in sheets:
+            w, h = m.length, m.section[1] / 1000.0
+            n += math.ceil(2 * (w + h) / (f["edge"] / 1000.0))          # по контуру
+            n += math.ceil(max(0.0, w / (sp / 1000.0) - 1)) * math.ceil(h / (f["mid"] / 1000.0))
+        size = f"{f['len']} мм" if "len" in f else f"глубина ≥{f['depth']} мм"
+        add(f"Гвоздь (винт): {lab}", size, n,
+            f"табл. 7-5: шаг {f['edge']} мм по краям, {f['mid']} мм на средних опорах, "
+            f"от краёв листа ≥{f['from_edge']} мм; листов {len(sheets)}")
+
+    # --- плёнки: скобки (9.3.3.2) ---
+    film = [m for m in ms if m.kind in ("windproof", "vapour")]
+    if film:
+        n = 0
+        for m in film:
+            w, h = m.length, m.section[1] / 1000.0
+            n += math.ceil(w / (sp / 1000.0) + 1) * math.ceil(h / 0.3 + 1)
+        add("Скобы: плёнки к каркасу", "10 мм", n,
+            "9.3.3.2: полотнища крепятся скобками к каркасу или обрешётке. Шаг СП "
+            "не нормирует — принято 300 мм по стойкам, это практика")
+
+    # --- стропила (табл. 8-1) и анкеры (6.2.8.4) ---
+    for lvl, node, msg in res.findings:
+        if "узел стропило-балка" in node:
+            raf = sum(1 for m in ms if m.kind == "rafter")
+            import re
+            mm = re.search(r"≥(\d+) гвозд", msg)
+            if mm and raf:
+                add("Гвоздь: стропило к балке", "80 мм", raf * int(mm.group(1)),
+                    f"табл. 8-1: ≥{mm.group(1)} гвоздей на каждое стропило; стропил {raf}")
+        if "анкеровка" in node:
+            import re
+            mm = re.search(r"≥(\d+) шт", msg)
+            if mm:
+                add("Анкерный болт Ø12", "—", int(mm.group(1)),
+                    "6.2.8.4: шаг ≤2400 мм по периметру")
+
+    return sorted(acc.values(), key=lambda r: -r["count"])
+
+
+def report(res: Result, spec: dict | None = None) -> str:
     lines = []
     lines.append(f"ПРОВЕРКА ПО {R.SP}")
     lines.append("=" * 72)
@@ -1604,11 +1713,12 @@ def report(res: Result) -> str:
                              ("УТЕПЛИТЕЛЬ (по ячейкам каркаса)", "утеплитель", "м³"),
                              ("ЛИСТОВЫЕ МАТЕРИАЛЫ (раскрой)", "лист", "м²"),
                              ("ОБЛИЦОВКА", "облицовка", "м²"),
-                             ("ПЛЁНКИ И МЕМБРАНЫ", "плёнка", "м²")):
+                             ("ПЛЁНКИ И МЕМБРАНЫ", "плёнка", "м²"),
+                             ("ЛЕНТА ПО ШВАМ", "лента", "пог. м")):
         rows = bom(res.members, mat)
         if not rows:
             continue
-        key = "volume_m3" if unit == "м³" else "area_m2"
+        key = {"м³": "volume_m3", "м²": "area_m2"}.get(unit, "total_m")
         total = sum(r[key] for r in rows)
         total_n = sum(r["count"] for r in rows)
         lines.append(f"{title} — {total_n} шт, {total:.3f} {unit}")
@@ -1618,4 +1728,13 @@ def report(res: Result) -> str:
             lines.append(f"{r['name'][:45]:<46}{r['section']:>9}{r['length_m']:>7.2f}"
                          f"{r['count']:>5}{r[key]:>8.3f}")
         lines.append("")
+    if spec is not None:
+        fr = fasteners(res, spec)
+        if fr:
+            lines.append(f"КРЕПЁЖ — {sum(r['count'] for r in fr)} шт (в модели не рисуется)")
+            lines.append("-" * 72)
+            lines.append(f"{'Наименование':<46}{'Размер':>16}{'Шт':>9}")
+            for r in fr:
+                lines.append(f"{r['name'][:45]:<46}{r['size']:>16}{r['count']:>9}")
+            lines.append("")
     return "\n".join(lines).rstrip() + "\n"

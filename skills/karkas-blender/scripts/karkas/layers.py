@@ -71,6 +71,9 @@ def _up(mm: float) -> int:
 # Рулон плёнки: ширина и нахлёст, мм. 9.3.3.2 требует нахлёста ≥100 мм; полотнища
 # кладут горизонтально, верхнее поверх нижнего.
 ROLL_MM = (1500, 100)
+# Ширина ленты по шву, мм. СП ширину не задаёт: 10.2.2 требует лишь проклейки
+# швов липкой лентой. 50 мм — практика.
+TAPE_MM = 50
 
 MATERIAL_NAMES = {"osb": "ОСП", "plywood": "фанера", "lumber": "пиломатериал",
                   "dvp": "ДВП", "csp": "ЦСП", "gkl": "ГКЛ", "gvl": "ГВЛ"}
@@ -86,6 +89,7 @@ DEFAULT_SHEATHING_EXT = "osb"
 # отдельно от каркаса нельзя.
 G_SHEATHING_EXT = "13_Обшивка_наружная"
 G_WINDPROOF = "14_Ветрозащита"
+G_TAPE = "18_Проклейка_швов"
 G_VAPOUR = "15_Пароизоляция"
 G_SHEATHING_INT = "16_Обшивка_внутренняя"
 G_CLADDING = "17_Облицовка"
@@ -281,6 +285,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     add = res.members.append
 
     _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
+    _tapes: list = []
     _holes = [(op["u"], op["u"] + op["width"], z0 + op["sill"], z0 + op["head"])
               for op in wall.get("openings", [])]
 
@@ -300,7 +305,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
 
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
              wrap=False, sheet=False, roll=False, col=None, mat=None,
-             cfg=None):
+             cfg=None, tape=False):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
@@ -367,6 +372,11 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                     if cb - ca > 1e-6:
                         out.append((ra, rb, ca, cb, bi))
             rects = out
+            if tape:
+                # шов — низ каждого полотнища, кроме самого нижнего
+                for ra, rb, ca, cb, bi in rects:
+                    if bi and abs(ca - bands[bi][0]) < 1e-6:
+                        _tapes.append((ra, rb, ca, c - bi * 0.0002 - 0.0006))
 
         for rect in rects:
             ra, rb, rz1, rz2 = rect[:4]
@@ -408,7 +418,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              f"полиэтилен), 9.3.2.10: паропроницаемость 0,61…5,0 мг/(Па·ч·м²). "
              f"9.3.3.2: стыки герметично или внахлёст ≥100 мм, крепить скобками "
              f"к каркасу или обрешётке. В модели показан условной толщиной 2 мм",
-             wrap=True, roll=True, col=G_WINDPROOF)
+             wrap=True, roll=True, col=G_WINDPROOF, tape=True)
 
     # --- утеплитель в пустотах каркаса ---
     if on["wall_insulation"] if ext else on["interior_insulation"]:
@@ -453,7 +463,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         slab("vapour", "Пароизоляция (плёнка ≥0,15 мм)", 2, depth, (z_bot + z_top) / 2, H,
              "9.3.2.2: полиэтиленовая плёнка ≥0,15 мм с тёплой стороны утеплителя; "
              "в модели показана условной толщиной 2 мм",
-             inset=_corner_clear, roll=True, col=G_VAPOUR)
+             inset=_corner_clear, roll=True, col=G_VAPOUR, tape=True)
 
     # --- внутренняя обшивка ---
     if on["wall_sheathing_int"]:
@@ -469,6 +479,16 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
             slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, -th * MM,
                  (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон",
                  sheet=True, col=G_SHEATHING_INT, cfg=(_siw, _sih, _si_stag))
+
+    # --- лента по швам плёнок (10.2.2) ---
+    _tw = float(_lay0.get("tape_mm", TAPE_MM)) * MM
+    for ta, tb, tz, tc in _tapes:
+        p1 = (o[0] + d[0] * ta - n[0] * tc, o[1] + d[1] * ta - n[1] * tc, tz)
+        p2 = (o[0] + d[0] * tb - n[0] * tc, o[1] + d[1] * tb - n[1] * tc, tz)
+        add(Member("tape", f"Лента по шву {int(round(_tw * 1000))} мм",
+                   (1, int(round(_tw * 1000))), p1, p2, n, G_TAPE,
+                   "10.2.2: все швы листов проклеиваются липкой лентой. Ширину ленты СП "
+                   "не задаёт. Шов — нахлёст полотнищ ≥100 мм (9.3.3.2)"))
 
     # --- облицовка по обрешётке с вентзазором ---
     if on["cladding"] and ext:

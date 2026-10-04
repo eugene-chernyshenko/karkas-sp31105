@@ -67,9 +67,9 @@ def apply_overrides(spec: dict, items: list[str]) -> dict:
     return spec
 
 
-def write_outputs(res, out_prefix: str) -> dict:
+def write_outputs(res, out_prefix: str, spec: dict | None = None) -> dict:
     os.makedirs(os.path.dirname(out_prefix) or ".", exist_ok=True)
-    rep = report(res)
+    rep = report(res, spec)
     with open(out_prefix + "_report.txt", "w", encoding="utf-8") as f:
         f.write(rep + "\n")
     rows = bom(res.members)
@@ -78,12 +78,20 @@ def write_outputs(res, out_prefix: str) -> dict:
                                           "count", "total_m", "volume_m3", "area_m2"])
         w.writeheader()
         w.writerows(rows)
+    if spec is not None:
+        from karkas.model import fasteners
+        fr = fasteners(res, spec)
+        with open(out_prefix + "_fasteners.csv", "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "size", "count", "note"])
+            w.writeheader()
+            w.writerows(fr)
     with open(out_prefix + "_members.json", "w", encoding="utf-8") as f:
         json.dump([{"kind": m.kind, "label": m.label, "section": m.sec_str,
                     "p1": m.p1, "p2": m.p2, "w_dir": m.w_dir, "group": m.group,
                     "length_m": round(m.length, 4), "note": m.note}
                    for m in res.members], f, ensure_ascii=False, indent=1)
     return {"report": out_prefix + "_report.txt", "bom": out_prefix + "_bom.csv",
+            "fasteners": out_prefix + "_fasteners.csv",
             "members": out_prefix + "_members.json", "text": rep}
 
 
@@ -153,7 +161,7 @@ def main():
         spec["hidden"] = list(spec.get("hidden") or []) + a.hide
 
     res = build_house(spec)
-    files = write_outputs(res, a.out)
+    files = write_outputs(res, a.out, spec)
     print(files["text"])
     print()
     for k, v in files.items():
