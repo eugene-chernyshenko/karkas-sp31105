@@ -52,6 +52,16 @@ SHEET_LAY = "h"
 # Кусок обшивки короче этого не выделяют в отдельный лист, м.
 MIN_PIECE = 0.30
 
+
+def _up(mm: float) -> int:
+    """Толщину по таблицам СП округляем только ВВЕРХ.
+
+    int(round(12.5)) в Python даёт 12 — округление к чётному. Для табл. 7-3
+    это означало ГКЛ 12 мм вместо нормативных 12,5: толщина ниже минимума.
+    """
+    import math
+    return int(math.ceil(mm - 1e-9))
+
 # Рулон плёнки: ширина и нахлёст, мм. 9.3.3.2 требует нахлёста ≥100 мм; полотнища
 # кладут горизонтально, верхнее поверх нижнего.
 ROLL_MM = (1500, 100)
@@ -259,7 +269,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     # чтобы не пересекаться со слоями поперечных стен
     ext_through = abs(d[1]) < 0.5
     # на сколько подрезать внутренние слои X-стен, чтобы не налезать на слои поперечных
-    _th_int = int(round(R.sheathing_min_thickness(sp, "gkl"))) * MM
+    _th_int = _up(R.sheathing_min_thickness(sp, "gkl")) * MM
     _corner_clear = (depth + (0.002 if on["vapour_barrier"] else 0.0)
                      + (_th_int if on["wall_sheathing_int"] else 0.0)) if ext_through else 0.0
     add = res.members.append
@@ -285,7 +295,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         этого наружные слои не доходят до угла: остаётся полоса голого каркаса,
         а для водовоздухозащитного слоя это ещё и разрыв вопреки 9.3.1.4.
         """
-        thick_mm = int(round(thick_mm))
+        thick_mm = _up(thick_mm)
         half = thick_mm * MM / 2
         c = offset + half
         lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
@@ -360,7 +370,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)
     th_ext = 0.0
     if on["wall_sheathing_ext"] and ext:
-        th = float(int(round(max(R.sheathing_min_thickness(sp, mat_ext), 9.5))))
+        th = max(R.sheathing_min_thickness(sp, mat_ext), 9.5)
         th_ext = th * MM
         _mn = MATERIAL_NAMES.get(mat_ext, mat_ext)
         _extra = R.material_note(mat_ext)
@@ -433,7 +443,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
 
     # --- внутренняя обшивка ---
     if on["wall_sheathing_int"]:
-        th = float(int(round(R.sheathing_min_thickness(sp, "gkl"))))
+        th = R.sheathing_min_thickness(sp, "gkl")
         off = depth + (2 * MM if on["vapour_barrier"] and ext else 0.0)
         slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, off,
              (z_bot + z_top) / 2, H,

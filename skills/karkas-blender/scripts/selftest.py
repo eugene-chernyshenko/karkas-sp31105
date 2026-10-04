@@ -299,6 +299,17 @@ true(not _over, f"обшивки и плёнки перекрывают проё
 true(sum(1 for m in _sh.members if m.kind == "sheathing_ext") > 1,
      "наружная обшивка должна резаться по проёму на несколько кусков")
 
+# толщина по таблицам СП не должна округляться ВНИЗ: int(round(12.5)) == 12
+_gk = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                   "layers": {"wall_sheathing_int": True}})
+for _m in _gk.members:
+    if _m.kind == "sheathing_int":
+        true(_m.section[0] >= 12.5 - 1e-9,
+             f"внутренняя обшивка {_m.section[0]} мм тоньше табл. 7-3 (12,5 мм)")
+        true("12,5" in _m.label or "12.5" in _m.label,
+             f"в подписи должна стоять нормативная толщина, а не округлённая: {_m.label}")
+        break
+
 # каждый слой оболочки — в своей коллекции, иначе его не выключить
 _col = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                     "layers": "all"})
