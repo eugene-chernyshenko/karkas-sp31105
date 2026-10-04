@@ -20,6 +20,7 @@ LAYER_DEFAULTS = {
     "wall_sheathing_int": False,   # внутренняя обшивка ГКЛ/ГВЛ (7.3.1, табл. 7-3)
     "wall_insulation": False,      # утеплитель между стойками (9.2.2.2 «а»)
     "interior_insulation": False,  # заполнение внутренних стен — звукоизоляция (7.5.2)
+    "insulation_stagger": True,    # швы смежных ячеек вразбежку (практика, не норма)
     "vapour_barrier": False,       # пароизоляция с тёплой стороны (9.3.1)
     "cladding": False,             # облицовка по обрешётке с вентзазором (10.4.4)
     "ceiling": False,              # подшивка потолка (6.5, табл. 7-3)
@@ -88,14 +89,18 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
     return out
 
 
-def _plates(a: float, b: float, step: float) -> list[tuple[float, float]]:
+def _plates(a: float, b: float, step: float, first: float = 0.0) -> list[tuple[float, float]]:
     """Делит ячейку по высоте на плиты step метров, снизу вверх.
 
+    first — высота первой плиты (для укладки вразбежку); 0 — как все.
     Остаток ниже 100 мм не плодит обрезок, а добавляется к последней плите.
     """
     if step <= 0 or b - a <= step + 0.1:
         return [(a, b)]
     out, z = [], a
+    if first > 0 and b - a > first + 0.1:
+        out.append((a, a + first))
+        z = a + first
     while b - z > step + 0.1:
         out.append((z, z + step))
         z += step
@@ -154,8 +159,15 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                 "7.5.2: звукоизоляция стен и перегородок внутри дома — по заданию на "
                 "проектирование. Само заполнение ячеек СП не нормирует: табл. 7-6 даёт "
                 "прибавку Iв только для обшивок и крепления к гибким профилям")
-        for u1, u2, a, b in _cavities(wall):
-            for z1, z2 in _plates(a, b, plate):
+        cav = _cavities(wall)
+        # Швы смежных ячеек не выводят в один уровень: в каждой второй ячейке
+        # первая плита — в половину высоты, дальше целые. СП этого не требует,
+        # но иначе стык проходит сквозной линией по всей стене.
+        bays = sorted({round(c[0], 4) for c in cav})
+        half = plate / 2 if on["insulation_stagger"] else 0.0
+        for u1, u2, a, b in cav:
+            first = half if bays.index(round(u1, 4)) % 2 else 0.0
+            for z1, z2 in _plates(a, b, plate, first):
                 zc, h = (z1 + z2) / 2, z2 - z1
                 c = depth / 2
                 p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)

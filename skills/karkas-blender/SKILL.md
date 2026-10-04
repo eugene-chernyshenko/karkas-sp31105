@@ -128,6 +128,7 @@ python3 $KARKAS/scripts/selftest.py
     "wall_insulation": false,      // утеплитель между стойками, по ячейкам (9.2.2.2 «а»)
     "interior_insulation": false,  // заполнение внутренних стен — звукоизоляция (7.5.2)
     "insulation_plate_mm": 1000,   // высота плиты утеплителя; 0 — ячейка одним куском
+    "insulation_stagger": true,    // швы смежных ячеек вразбежку (практика, не норма СП)
     "vapour_barrier": false,       // пароизоляция (9.3.1)
     "cladding": false,             // облицовка по обрешётке с вентзазором (10.3.2.2, 10.4.4)
     "ceiling": false,              // подшивка потолка (6.5)
