@@ -299,6 +299,21 @@ true(not _over, f"обшивки и плёнки перекрывают проё
 true(sum(1 for m in _sh.members if m.kind == "sheathing_ext") > 1,
      "наружная обшивка должна резаться по проёму на несколько кусков")
 
+# наружные слои должны заворачиваться на угол (9.3.1.4 — непрерывность)
+_cor = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                    "layers": {"wall_sheathing_ext": True, "windproof": True}})
+for _k in ("sheathing_ext", "windproof"):
+    _y = [c for m in _cor.members if m.kind == _k and abs(m.p1[1] - m.p2[1]) > 1e-6
+          for c in (m.p1[1], m.p2[1])]
+    _x = [c for m in _cor.members if m.kind == _k and abs(m.p1[1] - m.p2[1]) < 1e-6
+          for c in (m.p1[0], m.p2[0])]
+    true(_y and min(_y) <= 0.0 + 1e-9,
+         f"{_k}: Y-стена не доходит до угла, начинается с y={min(_y) if _y else None}")
+    true(_y and max(_y) >= 6.0 - 1e-9,
+         f"{_k}: Y-стена не доходит до дальнего угла, кончается на y={max(_y) if _y else None}")
+    true(_x and min(_x) <= 1e-9 and max(_x) >= 6.0 - 1e-9,
+         f"{_k}: X-стена не покрывает длину дома целиком")
+
 # 9.3.2.8: ветрозащита и материал наружной обшивки
 _base = {"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140"}
 _osb = build_house({**_base, "layers": {"wall_insulation": True,

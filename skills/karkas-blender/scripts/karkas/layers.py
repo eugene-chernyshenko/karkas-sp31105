@@ -192,15 +192,20 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     _holes = [(op["u"], op["u"] + op["width"], z0 + op["sill"], z0 + op["head"])
               for op in wall.get("openings", [])]
 
-    def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0):
+    def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
+             wrap=False):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
+        wrap — завернуть на угол. Каркас Y-стен короче на толщину X-стен, и без
+        этого наружные слои не доходят до угла: остаётся полоса голого каркаса,
+        а для водовоздухозащитного слоя это ещё и разрыв вопреки 9.3.1.4.
         """
         thick_mm = int(round(thick_mm))
         half = thick_mm * MM / 2
         c = offset + half
-        u_a, u_b = inset, (length or L) - inset
+        lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
+        u_a, u_b = inset - lap, (length or L) - inset + lap
         for ra, rb, rz1, rz2 in _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes):
             rzc, rh = (rz1 + rz2) / 2, rz2 - rz1
             p1 = (o[0] + d[0] * ra - n[0] * c, o[1] + d[1] * ra - n[1] * c, rzc)
@@ -221,7 +226,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам"
-             + (". " + _extra if _extra else ""))
+             + (". " + _extra if _extra else ""), wrap=True)
 
     # --- водовоздухозащитный слой (ветрозащита) ---
     if on["windproof"] and ext:
@@ -235,7 +240,8 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              f"материал проницаем для водяного пара (полиолефин, перфорированный "
              f"полиэтилен), 9.3.2.10: паропроницаемость 0,61…5,0 мг/(Па·ч·м²). "
              f"9.3.3.2: стыки герметично или внахлёст ≥100 мм, крепить скобками "
-             f"к каркасу или обрешётке. В модели показан условной толщиной 2 мм")
+             f"к каркасу или обрешётке. В модели показан условной толщиной 2 мм",
+             wrap=True)
 
     # --- утеплитель в пустотах каркаса ---
     if on["wall_insulation"] if ext else on["interior_insulation"]:
@@ -310,7 +316,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         slab("cladding", "Облицовка 20 мм", 20, -(base + gap + 0.020),
              (z_bot + z_top) / 2, H,
              "10.3.2.2: зазор между облицовкой и обшивкой ≥25 мм, рекомендуется 38 мм; "
-             "низ деревянной облицовки ≥250 мм над планировкой (5.4.7)")
+             "низ деревянной облицовки ≥250 мм над планировкой (5.4.7)", wrap=True)
 
 
 def platform_layers(res, spec: dict, on: dict, plat: dict, group: str,
