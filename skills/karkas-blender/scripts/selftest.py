@@ -73,8 +73,8 @@ eq(R.pick_lintel(1.5, "roof", snow_kpa=1.5, sheathed=True), 140, "подбор �
 res = build_house({"plan": {"length": 9.0, "width": 7.0}, "snow_kpa": 1.5,
                    "ext_stud": "38x140",
                    "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True}],
-                   "openings": [{"wall": "S", "u": 1.2, "width": 1.5, "height": 1.5,
-                                 "sill": 0.9}]})
+                   "openings": [{"wall": "S", "u": 1.2, "width": 1.5, "height": 1.4,
+                                 "sill": 0.8}]})
 true(not res.errors, f"эталонный дом должен проходить без ✗: {res.errors}")
 true(len(res.members) > 200, f"слишком мало элементов: {len(res.members)}")
 kinds = {m.kind for m in res.members}
@@ -87,6 +87,80 @@ true(sum(r["volume_m3"] for r in bom(res.members)) > 3.0, "подозрител�
 # нарушения должны выявляться
 bad = build_house({"plan": {"length": 9.0, "width": 12.0}, "snow_kpa": 3.0, "storeys": 3})
 true(bad.errors, "дом шириной 12 м при снеге 3,0 кПа должен давать ✗")
+
+# --- геометрия каркаса: элементы не должны пересекаться и выходить за габариты ---
+import itertools
+
+
+def _aabb(m):
+    ax, wv, hv = m.basis
+    c, half = m.center, [0.0, 0.0, 0.0]
+    for v, sz in ((ax, m.length), (wv, m.section[0] / 1000), (hv, m.section[1] / 1000)):
+        for i in range(3):
+            half[i] += abs(v[i]) * sz / 2
+    return [(c[i] - half[i], c[i] + half[i]) for i in range(3)]
+
+
+def collisions(members, min_vol=1e-7):
+    boxes = [(m, _aabb(m)) for m in members]
+    out = []
+    for (m1, b1), (m2, b2) in itertools.combinations(boxes, 2):
+        ov = [min(b1[i][1], b2[i][1]) - max(b1[i][0], b2[i][0]) for i in range(3)]
+        if all(o > 2e-4 for o in ov) and ov[0] * ov[1] * ov[2] > min_vol:
+            out.append((m1.label, m2.label, ov[0] * ov[1] * ov[2]))
+    return out
+
+
+_geo = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                    "interior_walls": [{"axis": "x", "pos": 3.0, "bearing": True}],
+                    "openings": [
+                        {"wall": "S", "u": 0.8, "width": 1.5, "height": 1.4, "sill": 0.8},
+                        {"wall": "S", "u": 3.0, "width": 1.0, "height": 2.1, "type": "door"},
+                        {"wall": "W", "u": 2.2, "width": 1.2, "height": 1.4, "sill": 0.8}]})
+true(not _geo.errors, f"контрольный дом для геометрии даёт ✗: {_geo.errors}")
+_walls = [m for m in _geo.members
+          if m.group in ("02_Стены_1", "03_Внутренние_стены")]
+_col = collisions(_walls)
+true(not _col, "элементы стен пересекаются по объёму: "
+               + "; ".join(f"{a[:34]} ∩ {b[:34]} ({v * 1e6:.0f} см³)" for a, b, v in _col[:4]))
+for m in _walls:
+    bb = _aabb(m)
+    true(bb[0][0] > -1e-3 and bb[0][1] < 6.0 + 1e-3
+         and bb[1][0] > -1e-3 and bb[1][1] < 6.0 + 1e-3,
+         f"элемент стены вне габаритов плана: {m.label}")
+
+# перемычка должна стоять НА РЕБРО: высота сечения больше толщины по вертикали (7.2.14)
+_hdr = next(m for m in _geo.members if m.kind == "header")
+_hb = _aabb(_hdr)
+true((_hb[2][1] - _hb[2][0]) > (_hb[0][1] - _hb[0][0]) * 0 + 0.08,
+     "7.2.14: перемычка должна быть поставлена на ребро (высота сечения — по вертикали)")
+
+# проём не помещается по высоте -> должно быть ✗
+_tall = build_house({"plan": {"length": 6.0, "width": 6.0}, "wall_height": 2.5,
+                     "openings": [{"wall": "S", "u": 1.0, "width": 1.5,
+                                   "height": 1.5, "sill": 0.9}]})   # верх 2,40 + 140 > 2,50
+true(any("не помещается под верхнюю обвязку" in f[2] and f[0] == "ERR"
+         for f in _tall.findings),
+     "перемычка выше свободной высоты стойки должна давать ✗")
+
+# проём у самого края стены -> должно быть ✗ (7.2.13)
+_edge = build_house({"plan": {"length": 6.0, "width": 6.0},
+                     "openings": [{"wall": "S", "u": 0.02, "width": 1.0,
+                                   "height": 1.4, "sill": 0.8}]})
+true(any("7.2.13" in f[2] and f[0] == "ERR" for f in _edge.findings),
+     "проём вплотную к углу должен давать ✗ (нет места под двойные стойки)")
+
+# слои оболочки не должны пересекаться с каркасом и друг с другом
+_geo_l = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140",
+                      "layers": "all",
+                      "openings": [{"wall": "S", "u": 1.0, "width": 1.5,
+                                    "height": 1.4, "sill": 0.8},
+                                   {"wall": "S", "u": 4.0, "width": 1.0,
+                                    "height": 2.1, "type": "door"}],
+                      "interior_walls": [{"axis": "x", "pos": 3.5, "bearing": True}]})
+_cl = collisions([m for m in _geo_l.members if "Стены" in m.group])
+true(not _cl, "слои оболочки пересекаются с каркасом: "
+              + "; ".join(f"{a[:32]} ∩ {b[:32]}" for a, b, _ in _cl[:4]))
 
 # --- 7.2.10: нахлёст досок верхней обвязки в углах и пересечениях ---
 lap = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",

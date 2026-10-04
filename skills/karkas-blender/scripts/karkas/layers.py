@@ -42,27 +42,31 @@ def resolve(spec: dict) -> dict:
     return out
 
 
-def _bay_segments(wall: dict) -> list[tuple[float, float, float, float]]:
-    """Ячейки между стойками: (u1, u2, z1, z2) с вычетом проёмов."""
-    t = R.sec(wall["stud"])[0] * MM
-    axes = wall["stud_axes"]
+def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
+    """Пустоты каркаса стены: прямоугольники (u1, u2, z1, z2), не занятые элементами.
+
+    Считается точно по проекции всех построенных элементов стены в её плоскость,
+    поэтому утеплитель гарантированно не пересекается со стойками, обвязками,
+    перемычками и укороченными стойками.
+    """
     z0, z1 = wall["z_bottom_plate_top"], wall["z_stud_top"]
+    solids = [s for s in wall.get("solids", []) if s[3] > z0 + 1e-6 and s[2] < z1 - 1e-6]
+    edges = sorted({round(v, 6) for s in solids for v in (s[0], s[1])}
+                   | {0.0, round(wall["length"], 6)})
     out = []
-    for a, b in zip(axes, axes[1:]):
-        u1, u2 = a + t / 2, b - t / 2
-        if u2 - u1 < 0.02:
+    for a, b in zip(edges, edges[1:]):
+        if b - a < 0.01:
             continue
-        uc = (u1 + u2) / 2
-        op = next((o for o in wall["openings"] if o["u"] - t <= uc <= o["u"] + o["width"] + t), None)
-        if op is None:
-            out.append((u1, u2, z0, z1))
-            continue
-        sill = z0 + op["sill"]
-        head = z0 + op["head"]
-        if op["type"] != "door" and sill - z0 > 0.05:
-            out.append((u1, u2, z0, sill - 0.038))
-        if z1 - head > 0.05:
-            out.append((u1, u2, head, z1))
+        mid = (a + b) / 2
+        spans = sorted((max(s[2], z0), min(s[3], z1))
+                       for s in solids if s[0] < mid < s[1])
+        cur = z0
+        for p1, p2 in spans:
+            if p1 > cur + 0.01:
+                out.append((a, b, cur, p1))
+            cur = max(cur, p2)
+        if z1 - cur > 0.01:
+            out.append((a, b, cur, z1))
     return out
 
 
@@ -76,28 +80,37 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     z_bot, z_top = wall["z_base"], wall["z_wall_top"]
     H = z_top - z_bot
     ext = wall["wall_kind"] == "external"
+    # X-стены идут насквозь, значит их ВНУТРЕННИЕ слои нужно подрезать на углах,
+    # чтобы не пересекаться со слоями поперечных стен
+    ext_through = abs(d[1]) < 0.5
+    # на сколько подрезать внутренние слои X-стен, чтобы не налезать на слои поперечных
+    _th_int = int(round(R.sheathing_min_thickness(sp, "gkl"))) * MM
+    _corner_clear = (depth + (0.002 if on["vapour_barrier"] else 0.0)
+                     + (_th_int if on["wall_sheathing_int"] else 0.0)) if ext_through else 0.0
     add = res.members.append
 
-    def slab(kind, label, thick_mm, offset, zc, h, note, length=None):
-        """Плита по всей стене: offset — от наружной грани внутрь (+) / наружу (−)."""
+    def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0):
+        """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−)."""
+        thick_mm = int(round(thick_mm))
         half = thick_mm * MM / 2
         c = offset + half
-        p1 = (o[0] + d[0] * 0 - n[0] * c, o[1] + d[1] * 0 - n[1] * c, zc)
-        p2 = (o[0] + d[0] * (length or L) - n[0] * c,
-              o[1] + d[1] * (length or L) - n[1] * c, zc)
+        u_a, u_b = inset, (length or L) - inset
+        p1 = (o[0] + d[0] * u_a - n[0] * c, o[1] + d[1] * u_a - n[1] * c, zc)
+        p2 = (o[0] + d[0] * u_b - n[0] * c, o[1] + d[1] * u_b - n[1] * c, zc)
         add(Member(kind, label, (int(round(thick_mm)), int(round(h * 1000))),
                    p1, p2, n, group, note))
 
     # --- наружная защитная обшивка каркаса ---
     if on["wall_sheathing_ext"] and ext:
-        th = max(R.sheathing_min_thickness(sp, "plywood"), 9.5)
-        slab("sheathing_ext", f"Наружная обшивка фанера {th:g} мм", th, -th * MM, (z_bot + z_top) / 2, H,
+        th = float(int(round(max(R.sheathing_min_thickness(sp, "plywood"), 9.5))))
+        slab("sheathing_ext", f"Наружная обшивка фанера {th:g} мм", th, -th * MM,
+             (z_bot + z_top) / 2, H,
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам")
 
-    # --- утеплитель между стойками ---
+    # --- утеплитель в пустотах каркаса ---
     if on["wall_insulation"] and ext:
-        for u1, u2, a, b in _bay_segments(wall):
+        for u1, u2, a, b in _cavities(wall):
             zc, h = (a + b) / 2, b - a
             c = depth / 2
             p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
@@ -112,15 +125,18 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     if on["vapour_barrier"] and ext:
         slab("vapour", "Пароизоляция (плёнка ≥0,15 мм)", 2, depth, (z_bot + z_top) / 2, H,
              "9.3.2.2: полиэтиленовая плёнка ≥0,15 мм с тёплой стороны утеплителя; "
-             "в модели показана условной толщиной 2 мм")
+             "в модели показана условной толщиной 2 мм",
+             inset=_corner_clear)
 
     # --- внутренняя обшивка ---
     if on["wall_sheathing_int"]:
-        th = R.sheathing_min_thickness(sp, "gkl")
+        th = float(int(round(R.sheathing_min_thickness(sp, "gkl"))))
         off = depth + (2 * MM if on["vapour_barrier"] and ext else 0.0)
-        slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, off, (z_bot + z_top) / 2, H,
+        slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, off,
+             (z_bot + z_top) / 2, H,
              f"табл. 7-3: ГКЛ/ГВЛ ≥{th:g} мм при шаге стоек {sp} мм; "
-             f"винты с шагом ≤300 мм (табл. 7-4), края листов над опорами (7.3.5.3)")
+             f"винты с шагом ≤300 мм (табл. 7-4), края листов над опорами (7.3.5.3)",
+             inset=_corner_clear)
         if not ext:
             slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, -th * MM,
                  (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон")

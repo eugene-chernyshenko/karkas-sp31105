@@ -154,6 +154,7 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                 origin[1] + d[1] * u - n[1] * inset, z)
 
     mid = h / 2
+    _i0 = len(res.members)
     z_bp_top = z_base + (0.038 if bottom_plate else 0.0)
     z_stud_top = z_bp_top + height
     z_wall_top = z_stud_top + 0.038 * top_plates
@@ -188,11 +189,28 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
             add(Member("plate", f"Верхняя обвязка {i + 1} ({name})", (38, h_mm),
                        P(s1, mid, z), P(s2, mid, z), (0, 0, 1), group, note))
 
-    # --- разметка проёмов ---
+    # --- разметка проёмов + проверка размещения ---
     blocked: list[tuple[float, float]] = []
-    for op in openings:
+    for op in sorted(openings, key=lambda o: o["u"]):
         u0, w = op["u"], op["width"]
+        if u0 - 2 * t < -1e-6 or u0 + w + 2 * t > length + 1e-6:
+            res.err(f"{name}/проём @{u0:.2f}",
+                    f"проём шириной {w:.2f} м не помещается: по 7.2.13 с каждой стороны нужны "
+                    f"двойные стойки ({2 * t * 1000:.0f} мм), поэтому левый край должен быть "
+                    f"≥{2 * t:.3f} м, правый ≤{length - 2 * t:.3f} м от начала стены "
+                    f"(длина стены {length:.2f} м)")
+        if blocked and u0 - 2 * t < blocked[-1][1] - 1e-6:
+            res.err(f"{name}/проём @{u0:.2f}",
+                    f"обрамление проёма пересекается с предыдущим: между проёмами должно "
+                    f"оставаться ≥{4 * t * 1000:.0f} мм на двойные стойки (7.2.13)")
         blocked.append((u0 - 2 * t, u0 + w + 2 * t))
+
+    # --- 7.2.9: стыки досок обвязок ---
+    if length > 6.0 and bearing:
+        res.ok(f"{name}/стыки обвязок",
+               f"длина стены {length:.2f} м больше ходовой доски 6 м — стыки нижней доски "
+               f"верхней обвязки располагать над стойками, стыки верхней доски смещать "
+               f"относительно них на один шаг стоек ({spacing_mm} мм) (7.2.9)")
 
     def free(u: float) -> bool:
         return all(not (a - t / 2 < u < b + t / 2) for a, b in blocked)
@@ -211,10 +229,40 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
     for side, want in zip((0, 1), corner_nailers):
         if not want:
             continue
-        u = t * 1.5 if side == 0 else length - t * 1.5
-        add(Member("stud", f"Угловая стойка-нашивка {stud} ({name})", (h_mm, t_mm),
-                   P(u, t / 2, z_bp_top), P(u, t / 2, z_stud_top), d, group,
-                   "7.2.11: третья стойка угла, длинной стороной параллельно стене"))
+        # вплотную к крайней стойке, длинной стороной вдоль стены, у ВНУТРЕННЕЙ грани —
+        # служит основанием для внутренней обшивки (7.2.11). Длина подрезается по
+        # свободному месту между крайней и ближайшей рядовой стойкой.
+        others = [a for a in stud_axes if (a > t if side == 0 else a < length - t)]
+        if side == 0:
+            lo = t
+            hi = min([a - t / 2 for a in others] + [length - t]) if others else length - t
+        else:
+            hi = length - t
+            lo = max([a + t / 2 for a in others] + [t]) if others else t
+        avail = hi - lo
+        if avail < 0.06:
+            res.warn(f"{name}/угол",
+                     "7.2.11: нет места под третью стойку угла — используйте угол на двух "
+                     "стойках либо сместите ближайшую рядовую стойку")
+            continue
+        ln = min(h, avail)
+        u = lo + ln / 2 if side == 0 else hi - ln / 2
+        add(Member("stud", f"Угловая стойка-нашивка {stud} ({name})",
+                   (int(round(ln * 1000)), t_mm),
+                   P(u, h - t / 2, z_bp_top), P(u, h - t / 2, z_stud_top), d, group,
+                   "7.2.11: угол на трёх стойках — дополнительная стойка длинной стороной "
+                   "параллельно стене, для крепления внутренних обшивок"))
+
+    def _cripple_axes(a: float, b: float) -> list[float]:
+        """Оси укороченных стоек: модуль стены внутри проёма + по краям у опорных стоек."""
+        out = [a + t / 2, b - t / 2]
+        out += [u for u in module_positions(length, spacing_mm, t_mm) if a + t < u < b - t]
+        out = sorted(out)
+        res_ = []
+        for u in out:
+            if not res_ or u - res_[-1] > t * 0.9:
+                res_.append(round(u, 6))
+        return res_ if b - a > t * 1.2 else []
 
     # --- проёмы ---
     for op in openings:
@@ -244,20 +292,31 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
                 res.ok(f"{name}/перемычка @{u0:.2f}",
                        f"2х(38x{depth}) на пролёт {span_clear:.2f} м "
                        f"({'Б-13' if sheathed and wall_kind == 'external' else 'Б-12'})")
+        if head + depth * MM > height + 1e-6:
+            fit = height - depth * MM
+            res.err(f"{name}/проём @{u0:.2f}",
+                    f"верх проёма {head:.3f} м + высота перемычки {depth} мм = "
+                    f"{head + depth * MM:.3f} м выше свободной высоты стойки {height:.3f} м — "
+                    f"перемычка не помещается под верхнюю обвязку. Опустите верх проёма "
+                    f"до ≤{fit:.3f} м или увеличьте высоту стены. "
+                    f"В модели перемычка прижата к верхней обвязке, фактический верх "
+                    f"проёма {max(sill_h, fit):.3f} м")
+            head = max(sill_h + 0.1, fit)
         z_head = z_bp_top + head
         # две доски на ребро + заполнение до толщины стены (7.2.14)
         for i in range(2):
-            off = 0.019 + 0.038 * i   # две доски вплотную, от наружной грани внутрь
+            off = 0.019 + 0.038 * i   # две доски на ребро вплотную, от наружной грани внутрь
             add(Member("header", f"Перемычка 38x{depth} ({name}, {tag})", (38, depth),
                        P(u0 - t, off, z_head + depth * MM / 2),
-                       P(u0 + w + t, off, z_head + depth * MM / 2), (0, 0, 1), group,
-                       "7.2.14: 2 доски на ребро, толщина перемычки = ширине стоек у проёма"))
+                       P(u0 + w + t, off, z_head + depth * MM / 2), n, group,
+                       "7.2.14: 2 доски, поставленные НА РЕБРО и сбитые гвоздями; "
+                       "толщина перемычки равна ширине стоек, обрамляющих проём"))
         filler = h_mm - 76
         if filler > 0:
             add(Member("header_filler", f"Прокладка перемычки {filler}x{depth} ({name})",
                        (filler, depth),
                        P(u0 - t, 0.076 + filler * MM / 2, z_head + depth * MM / 2),
-                       P(u0 + w + t, 0.076 + filler * MM / 2, z_head + depth * MM / 2), (0, 0, 1),
+                       P(u0 + w + t, 0.076 + filler * MM / 2, z_head + depth * MM / 2), n,
                        group, "7.2.14: прокладка (дерево или жёсткий утеплитель) до толщины стены"))
 
         # стойки у проёма: опорные (jack) + крайние (king), 7.2.13
@@ -274,10 +333,12 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
         # укороченные стойки над перемычкой
         z_above = z_head + depth * MM
         if z_stud_top - z_above > 0.05:
-            for u in module_positions(w, spacing_mm, t_mm):
+            for u in _cripple_axes(u0, u0 + w):
                 add(Member("cripple", f"Стойка укороченная {stud} ({name}, над перемычкой)",
-                           (t_mm, h_mm), P(u0 + u, mid, z_above), P(u0 + u, mid, z_stud_top),
-                           d, group, "конструктивно: заполнение над перемычкой по модулю стоек"))
+                           (t_mm, h_mm), P(u, mid, z_above), P(u, mid, z_stud_top),
+                           d, group, "заполнение над перемычкой по модулю стоек стены — "
+                                     "края листов обшивки должны располагаться над опорами "
+                                     "(7.3.5.3)"))
 
         # подоконная доска и укороченные стойки под ней
         if otype != "door" and sill_h > 0.05:
@@ -285,10 +346,12 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
             add(Member("sill_board", f"Подоконная доска 38x{h_mm} ({name}, {tag})", (38, h_mm),
                        P(u0, mid, z_sill - 0.019), P(u0 + w, mid, z_sill - 0.019), (0, 0, 1),
                        group, "конструктивный элемент (в СП 31-105 явно не нормируется)"))
-            for u in module_positions(w, spacing_mm, t_mm):
+            for u in _cripple_axes(u0, u0 + w):
                 add(Member("cripple", f"Стойка укороченная {stud} ({name}, под окном)",
-                           (t_mm, h_mm), P(u0 + u, mid, z_bp_top), P(u0 + u, mid, z_sill - 0.038),
-                           d, group, "конструктивно: заполнение под проёмом по модулю стоек"))
+                           (t_mm, h_mm), P(u, mid, z_bp_top), P(u, mid, z_sill - 0.038),
+                           d, group, "заполнение под проёмом по модулю стоек стены — "
+                                     "края листов обшивки должны располагаться над опорами "
+                                     "(7.3.5.3)"))
 
     # --- связи жёсткости при отсутствии жёсткой обшивки (7.2.5) ---
     if not sheathed and bearing:
@@ -312,7 +375,20 @@ def frame_wall(res: Result, *, origin: tuple[float, float], d: Vec, n: Vec,
             res.ok(f"{name}/связи жёсткости",
                    "7.2.5: каркас без жёсткой обшивки — установлены связи жёсткости")
 
-    return {"z_base": z_base, "z_bottom_plate_top": z_bp_top,
+    # --- проекция всех элементов стены в её плоскость: (u1, u2, z1, z2) ---
+    solids = []
+    for m in res.members[_i0:]:
+        ax, wv, hv = m.basis
+        c = m.center
+        du = dz = 0.0
+        for v, sz in ((ax, m.length), (wv, m.section[0] / 1000), (hv, m.section[1] / 1000)):
+            du += abs(v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) * sz / 2
+            dz += abs(v[2]) * sz / 2
+        uc = (c[0] - origin[0]) * d[0] + (c[1] - origin[1]) * d[1]
+        solids.append((uc - du, uc + du, c[2] - dz, c[2] + dz))
+
+    return {"solids": solids,
+            "z_base": z_base, "z_bottom_plate_top": z_bp_top,
             "z_stud_top": z_stud_top, "z_wall_top": z_wall_top, "depth": h,
             "origin": origin, "d": d, "n": n, "length": length, "height": height,
             "stud": stud, "spacing_mm": spacing_mm, "name": name,
