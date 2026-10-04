@@ -323,17 +323,23 @@ _sht = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
 _ss = [m for m in _sht.members if m.kind == "sheathing_ext"
        and abs(m.p1[1] - m.p2[1]) < 1e-6 and m.p1[1] < 0.3]
 true(len(_ss) > 8, f"обшивка не раскроена на листы: кусков {len(_ss)}")
-true(all(m.length <= 1.2 + 1e-6 for m in _ss),
-     f"кусок шире листа 1200 мм: {max(m.length for m in _ss):.3f} м")
-true(all(m.section[1] <= 2500 + 1 for m in _ss),
-     f"кусок выше листа 2500 мм: {max(m.section[1] for m in _ss)} мм")
+true(all(m.length <= 2.4 + 1e-6 for m in _ss),
+     f"кусок шире листа 2400 мм: {max(m.length for m in _ss):.3f} м")
+true(all(m.section[1] <= 1200 + 1 for m in _ss),
+     f"лист кладётся плашмя: высота куска >1200 мм: {max(m.section[1] for m in _ss)} мм")
+_v = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                  "layers": {"wall_sheathing_ext": True, "sheet_lay": "v"}})
+_vs = [m for m in _v.members if m.kind == "sheathing_ext"
+       and abs(m.p1[1] - m.p2[1]) < 1e-6 and m.p1[1] < 0.3]
+true(max(m.section[1] for m in _vs) > 1200,
+     "sheet_lay='v' — лист должен вставать на длинную сторону")
 _rows = {}
 for m in _ss:
     _rows.setdefault(round(m.p1[2] - m.section[1] / 2000.0, 3), set()).add(
         round(min(m.p1[0], m.p2[0]), 3))
-_lo, _hi = min(_rows), max(_rows)
-true(_rows[_lo] != _rows[_hi],
-     f"ряды листов не вразбежку — стыки совпали: {sorted(_rows[_lo])[:4]}")
+_rk = sorted(_rows)
+true(all(_rows[a] != _rows[b] for a, b in zip(_rk, _rk[1:])),
+     f"соседние ряды листов не вразбежку: {[sorted(_rows[k])[:3] for k in _rk]}")
 _bad = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                     "layers": {"wall_sheathing_ext": True, "sheet_mm": [1250, 2500]}})
 true(any(f[0] == "WARN" and "обшивки/раскрой" in f[1] for f in _bad.findings),

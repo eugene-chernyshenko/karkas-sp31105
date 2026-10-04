@@ -31,8 +31,13 @@ PALETTE = {
     "fascia":        (0.35, 0.58, 0.42, 1.0),
     "roof_beam":     (0.45, 0.70, 0.50, 1.0),
     "subfloor":      (0.80, 0.78, 0.72, 0.30),
-    "sheathing_ext": (0.86, 0.84, 0.76, 0.85),
-    "sheathing_int": (0.93, 0.93, 0.90, 0.85),
+    "sheathing_ext":         (0.74, 0.56, 0.30, 1.0),   # ОСП — тёплая стружка
+    "sheathing_ext:plywood": (0.85, 0.72, 0.50, 1.0),   # фанера светлее
+    "sheathing_ext:lumber":  (0.80, 0.64, 0.42, 1.0),
+    "sheathing_ext:dvp":     (0.62, 0.46, 0.33, 1.0),
+    "sheathing_ext:csp":     (0.72, 0.72, 0.70, 1.0),   # ЦСП — серая
+    "sheathing_int":         (0.94, 0.94, 0.92, 1.0),   # ГКЛ
+    "windproof":             (0.90, 0.91, 0.90, 0.80),  # мембрана
     "insulation":    (0.95, 0.86, 0.45, 0.55),
     "vapour":        (0.55, 0.75, 0.90, 0.40),
     "cladding":      (0.62, 0.45, 0.33, 1.0),
@@ -45,6 +50,12 @@ PALETTE = {
     "foundation":    (0.55, 0.55, 0.58, 1.0),
 }
 DEFAULT_COLOR = (0.75, 0.60, 0.40, 1.0)
+
+
+def _palette_key(m) -> str:
+    """Ключ палитры: kind, а для обшивок — kind:материал (ОСП, фанера, ЦСП…)."""
+    mat = m.meta.get("material")
+    return f"{m.kind}:{mat}" if mat and f"{m.kind}:{mat}" in PALETTE else m.kind
 
 
 def _material(kind: str):
@@ -168,7 +179,7 @@ def add_member(m: Member, collection) -> bpy.types.Object:
     obj = bpy.data.objects.new(m.label, mesh)
     obj.matrix_world = member_matrix(m)
     obj.scale = Vector(m.size)
-    obj.data.materials.append(_material(m.kind))
+    obj.data.materials.append(_material(_palette_key(m)))
     obj["kind"] = m.kind
     obj["section"] = m.sec_str
     obj["length_m"] = round(m.length, 4)
@@ -188,7 +199,7 @@ def add_panel(m: Member, collection) -> bpy.types.Object:
     obj = bpy.data.objects.new(m.label, mesh)
     obj.location = Vector(m.center)
     obj.scale = Vector((dx, dy, dz))
-    obj.data.materials.append(_material(m.kind))
+    obj.data.materials.append(_material(_palette_key(m)))
     obj["kind"] = m.kind
     obj["sp_note"] = m.note
     collection.objects.link(obj)

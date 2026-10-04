@@ -42,7 +42,13 @@ DEFAULT_LAYER_MM = 50
 
 # Ходовой лист ОСП/ГКЛ, мм. Ширина взята кратной шагу стоек 600: по 7.3.5.3 все края
 # листов должны лежать над опорами, а 1250 при шаге 600 на стойку не попадает.
-SHEET_MM = (1200, 2500)
+# Лист обшивки, мм (короткая сторона, длинная). 2400 = 4 шага стойки по 600,
+# 1200 = 2 шага: по 7.3.5.3 края листов обязаны лежать над опорами, и так это
+# выполняется при любой ориентации. Ходовые 2500x1250 под шаг 600 не ложатся.
+SHEET_MM = (1200, 2400)
+# Как кладут лист: "h" — длинной стороной горизонтально (так кладут обычно),
+# "v" — вертикально.
+SHEET_LAY = "h"
 
 # Рулон плёнки: ширина и нахлёст, мм. 9.3.3.2 требует нахлёста ≥100 мм; полотнища
 # кладут горизонтально, верхнее поверх нижнего.
@@ -228,13 +234,16 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     _holes = [(op["u"], op["u"] + op["width"], z0 + op["sill"], z0 + op["head"])
               for op in wall.get("openings", [])]
 
-    _sheet = _lay0.get("sheet_mm", SHEET_MM)
-    _sw, _sh = float(_sheet[0]) * MM, float(_sheet[1]) * MM
+    _sheet = sorted(float(v) for v in _lay0.get("sheet_mm", SHEET_MM))
+    if _lay0.get("sheet_lay", SHEET_LAY) == "v":
+        _sw, _sh = _sheet[0] * MM, _sheet[1] * MM
+    else:
+        _sw, _sh = _sheet[1] * MM, _sheet[0] * MM
     _roll = _lay0.get("roll_mm", ROLL_MM)
     _rw, _rlap = float(_roll[0]) * MM, float(_roll[1]) * MM
 
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
-             wrap=False, sheet=False, roll=False, col=None):
+             wrap=False, sheet=False, roll=False, col=None, mat=None):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
@@ -275,7 +284,8 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
             p1 = (o[0] + d[0] * ra - n[0] * rc, o[1] + d[1] * ra - n[1] * rc, rzc)
             p2 = (o[0] + d[0] * rb - n[0] * rc, o[1] + d[1] * rb - n[1] * rc, rzc)
             add(Member(kind, label, (thick_mm, int(round(rh * 1000))),
-                       p1, p2, n, col or group, note))
+                       p1, p2, n, col or group, note,
+                       meta={"material": mat} if mat else {}))
 
     # --- наружная защитная обшивка каркаса ---
     mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)
@@ -290,7 +300,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам"
              + (". " + _extra if _extra else ""), wrap=True, sheet=True,
-             col=G_SHEATHING_EXT)
+             col=G_SHEATHING_EXT, mat=mat_ext)
 
     # --- водовоздухозащитный слой (ветрозащита) ---
     if on["windproof"] and ext:

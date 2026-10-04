@@ -1459,7 +1459,10 @@ def build_house(user_spec: dict | None = None) -> Result:
         if _note:
             res.warn("обшивка наружная/материал", _note)
     if _on["wall_sheathing_ext"] or _on["wall_sheathing_int"]:
-        _sw = int(float((_lay0.get("sheet_mm") or layers.SHEET_MM)[0]))
+        _sm = sorted(float(v) for v in (_lay0.get("sheet_mm") or layers.SHEET_MM))
+        _lay = _lay0.get("sheet_lay", layers.SHEET_LAY)
+        _sw = int(_sm[0] if _lay == "v" else _sm[1])
+        _shh = int(_sm[1] if _lay == "v" else _sm[0])
         if _sw % sp:
             res.warn("обшивки/раскрой",
                      f"7.3.5.3: все края листов должны лежать над опорами, а лист шириной "
@@ -1468,8 +1471,10 @@ def build_house(user_spec: dict | None = None) -> Result:
                      f"или шаг, кратный листу (layers.sheet_mm)")
         else:
             res.ok("обшивки/раскрой",
-                   f"7.3.5.3: лист {_sw} мм кратен шагу стоек {sp} мм — вертикальные стыки "
-                   f"ложатся на стойки; ряды разложены вразбежку, со сдвигом на пол-листа")
+                   f"7.3.5.3: лист {_sw}x{_shh} мм "
+                   f"({'длинной стороной горизонтально' if _lay != 'v' else 'вертикально'}), "
+                   f"{_sw} кратно шагу стоек {sp} мм — вертикальные стыки ложатся на "
+                   f"стойки; ряды разложены вразбежку, со сдвигом на пол-листа")
 
     if _on["windproof"]:
         res.ok("водовоздухозащитный слой",
