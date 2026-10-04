@@ -18,7 +18,7 @@
 ```bash
 git clone https://github.com/eugene-chernyshenko/karkas-sp31105
 cd karkas-sp31105
-K=.claude/skills/karkas-blender
+K=skills/karkas-blender
 
 # проверка по нормам + ведомость, без Blender (секунды)
 python3 $K/scripts/build_house.py --spec dom_9x7 --out out/dom --check
@@ -93,7 +93,7 @@ python3 $K/scripts/build_house.py --check --out out/d \
 ## Расчёты без модели
 
 ```python
-import sys; sys.path.insert(0, ".claude/skills/karkas-blender/scripts")
+import sys; sys.path.insert(0, "skills/karkas-blender/scripts")
 from karkas import rules as R, build_house, report
 
 R.pick_joist(4.2, 400)                      # '38x235'
@@ -123,7 +123,11 @@ print(report(res)); res.errors
 ```
 SP-31-105-2002.pdf                      оригинал свода правил (46 чертежей узлов)
 docs/sp31105-full.txt                   полный текст для grep (маркеры ===== PAGE N =====)
-.claude/skills/karkas-blender/
+.claude-plugin/plugin.json              манифест плагина Claude Code
+.claude-plugin/marketplace.json         репозиторий как marketplace
+commands/build.md, check.md             слэш-команды плагина
+.claude/skills/karkas-blender           симлинк -> skills/karkas-blender (чтобы skill работал в клоне)
+skills/karkas-blender/
     SKILL.md                            формат спецификации, что проверяется, ограничения
     references/01..06-*.md              выжимка норм по разделам + все таблицы Приложения Б
     scripts/karkas/rules.py             таблицы СП в коде + подбор сечений
@@ -138,21 +142,40 @@ docs/sp31105-full.txt                   полный текст для grep (м�
 Самопроверка сверяет ~35 контрольных значений прямо из таблиц СП и собирает эталонный дом:
 
 ```bash
-python3 .claude/skills/karkas-blender/scripts/selftest.py
+python3 skills/karkas-blender/scripts/selftest.py
 ```
 
-## Как skill для Claude Code
+## Установка в Claude Code
+
+### Как плагин (рекомендуется)
+
+Репозиторий сам является marketplace — ставится в две команды:
+
+```
+/plugin marketplace add eugene-chernyshenko/karkas-sp31105
+/plugin install karkas-sp31105@karkas-sp31105
+```
+
+Появятся skill `karkas-blender` и команды:
+
+| Команда | Что делает |
+|---|---|
+| `/karkas-sp31105:build 9x7, 1 этаж, снег 1.5, двускатка 1:2` | собирает дом: проверка → геометрия → `.blend` и рендеры |
+| `/karkas-sp31105:check балка 38x235 шаг 400 пролёт 4.5 м` | точечная проверка по таблицам, без Blender |
+
+Skill подхватывается и без команд — достаточно попросить «построй каркас 10×8,
+снег 2 кПа». Стоимость в контексте: ~230 токенов always-on, ~5,3k при срабатывании.
+
+### Как личный skill, без плагина
 
 ```bash
-# во всех проектах сразу
-cp -r .claude/skills/karkas-blender ~/.claude/skills/
-
-# или один источник правды
-ln -s "$PWD/.claude/skills/karkas-blender" ~/.claude/skills/karkas-blender
+cp -r skills/karkas-blender ~/.claude/skills/
+# или один источник правды:
+ln -s "$PWD/skills/karkas-blender" ~/.claude/skills/karkas-blender
 ```
 
-Дальше достаточно сказать «построй каркас 10×8, снег 2 кПа, двускатка 1:2» — skill
-подхватится сам. Каталог скилла самодостаточен и работает из любого места.
+Каталог скилла самодостаточен и работает из любого места. В клонированном репозитории
+skill виден сразу — `.claude/skills/karkas-blender` ссылается на `skills/karkas-blender`.
 
 ## Лицензия
 

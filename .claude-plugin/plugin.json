@@ -1,0 +1,17 @@
+{
+  "name": "karkas-sp31105",
+  "description": "Параметрический генератор деревянного каркаса дома для Blender по СП 31-105-2002: стены, перекрытия, стропильные крыши, проёмы и перемычки. Автоподбор сечений по таблицам Приложения Б, проверка соответствия нормам, ведомость пиломатериалов.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Eugene Chernyshenko",
+    "url": "https://github.com/eugene-chernyshenko"
+  },
+  "commands": [
+    "./commands/build.md",
+    "./commands/check.md"
+  ],
+  "homepage": "https://github.com/eugene-chernyshenko/karkas-sp31105",
+  "repository": "https://github.com/eugene-chernyshenko/karkas-sp31105",
+  "license": "MIT",
+  "keywords": ["blender", "timber-frame", "platform-frame", "building-code", "parametric-design", "bpy", "construction", "sp31105", "karkas"]
+}

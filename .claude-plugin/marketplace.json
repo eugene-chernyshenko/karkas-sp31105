@@ -1,0 +1,20 @@
+{
+  "name": "karkas-sp31105",
+  "owner": {
+    "name": "Eugene Chernyshenko",
+    "url": "https://github.com/eugene-chernyshenko"
+  },
+  "metadata": {
+    "description": "Каркасное домостроение по СП 31-105-2002 в Blender",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "karkas-sp31105",
+      "source": "./",
+      "description": "Параметрический генератор деревянного каркаса дома для Blender по СП 31-105-2002. Строит платформенный каркас до 3 этажей (перекрытия с составными прогонами, стены с проёмами и перемычками, двускатная и плоская крыша), подбирает сечения по таблицам Приложения Б, проверяет соответствие нормам и выдаёт ведомость пиломатериалов.",
+      "category": "productivity",
+      "tags": ["blender", "timber-frame", "building-code", "parametric-design", "construction", "3d"]
+    }
+  ]
+}

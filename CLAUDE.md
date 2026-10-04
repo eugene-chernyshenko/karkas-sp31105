@@ -16,7 +16,10 @@
 SP-31-105-2002.pdf                      оригинал свода правил
 docs/sp31105-full.txt                   полный текст для grep (маркеры ===== PAGE N =====)
 out/                                    результаты: .blend, .png, отчёты, ведомости
-.claude/skills/karkas-blender/
+.claude-plugin/                         манифесты плагина Claude Code
+commands/                               слэш-команды /karkas-sp31105:build и :check
+.claude/skills/karkas-blender           симлинк -> skills/karkas-blender
+skills/karkas-blender/
     SKILL.md                            как пользоваться (формат спецификации, что проверяется)
     references/01..06-*.md              выжимка норм по разделам + все таблицы Приложения Б
     scripts/build_house.py              CLI
@@ -26,6 +29,9 @@ out/                                    результаты: .blend, .png, от
     scripts/karkas/build.py             построение в Blender, камера, рендер
     scripts/selftest.py                 самопроверка таблиц и генератора
     examples/dom_9x7.json               рабочий пример
+
+Каталог `skills/karkas-blender/` самодостаточен: переносится в другой проект,
+в `~/.claude/skills/` или ставится плагином целиком (см. README).
 ```
 
 ## Окружение
