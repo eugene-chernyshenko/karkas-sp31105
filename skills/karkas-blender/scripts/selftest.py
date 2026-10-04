@@ -274,6 +274,64 @@ for k in ("sheathing_ext", "sheathing_int", "insulation", "vapour", "cladding",
     true(k in lk, f"слой {k} не построен при layers='all'")
 true(any("теплотехнич" in f[2] and f[0] == "WARN" for f in lay.findings),
      "нет предупреждения, что толщина утеплителя требует расчёта")
+# утеплитель: проёмы, слои по глубине, смещение швов, перегородки
+ins = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                   "wall_height": 2.5,
+                   "layers": {"wall_insulation": True, "interior_insulation": True,
+                              "insulation_layer_mm": 50, "insulation_plate_mm": 1000},
+                   "interior_walls": [{"axis": "x", "pos": 3.0, "bearing": True}],
+                   "openings": [{"wall": "S", "u": 0.8, "width": 1.5, "height": 1.5,
+                                 "sill": 0.8, "type": "window"}]})
+_i = [m for m in ins.members if m.kind == "insulation"]
+true(_i, "утеплитель стен не построен")
+
+# 1) проём не заполняется: окно S u 0.8..2.3, низ проёма = верх обвязки + 0.8
+_z0 = ins.levels["floor_1"] + 0.038
+_box = (0.8, 2.3, _z0 + 0.8, _z0 + 2.3)
+_hit = []
+for m in _i:
+    if abs(m.p1[1] - m.p2[1]) > 1e-6 or m.p1[1] > 0.2:   # только стена S
+        continue
+    u1, u2 = sorted((m.p1[0], m.p2[0]))
+    h = m.section[1] / 1000.0
+    z1, z2 = m.p1[2] - h / 2, m.p1[2] + h / 2
+    if min(u2, _box[1]) - max(u1, _box[0]) > 1e-6 and min(z2, _box[3]) - max(z1, _box[2]) > 1e-6:
+        _hit.append((round(u1, 3), round(z1, 3)))
+true(not _hit, f"утеплитель лезет в проём окна (9.2.3.2 тут ни при чём): {_hit[:3]}")
+
+# 2) глубина 140 мм набирается слоями 50+50+40, а не одним куском
+_th = sorted({m.section[0] for m in _i if m.label.startswith("Утеплитель")})
+eq(_th, [40, 50], "утеплитель 140 мм должен набираться слоями 50+50+40")
+true(any(f[0] == "WARN" and "не делится на плиту" in f[2] for f in ins.findings),
+     "нет ! о том, что 140 мм не делится на плиту 50 мм нацело")
+
+# 3) швы слоёв разведены: в одной ячейке стыки разных слоёв не совпадают
+_cell = [m for m in _i if abs(m.p1[0] - 4.219) < 1e-3 and m.p1[1] < 0.2]
+_seams = {}
+for m in _cell:
+    h = m.section[1] / 1000.0
+    _seams.setdefault(round(m.p1[1], 4), []).append(round(m.p1[2] + h / 2, 3))
+_tops = [sorted(v)[:-1] for v in _seams.values()]
+true(len(_seams) >= 2, "в ячейке должно быть несколько слоёв по глубине")
+true(len({tuple(t) for t in _tops if t}) == len([t for t in _tops if t]),
+     f"швы слоёв совпали по высоте — нет укладки внахлёст: {_tops}")
+
+# 4) перегородка заполняется отдельным слоем и подписана звукоизоляцией
+true(any(m.label.startswith("Звукоизоляция") for m in ins.members),
+     "interior_insulation не заполнил внутреннюю стену")
+true(all("7.5.2" in m.note for m in ins.members
+         if m.label.startswith("Звукоизоляция")),
+     "звукоизоляция перегородки должна ссылаться на 7.5.2")
+
+# 5) утеплитель — свой слой и своя ведомость, не вперемешку с пиломатериалом
+true({m.group for m in _i} <= {"11_Утеплитель_стен", "12_Утеплитель_чердака"},
+     "утеплитель должен лежать в своих коллекциях, а не в слоях стен и крыши")
+_mats = {r["material"] for r in bom(ins.members)}
+true("утеплитель" in _mats and "пиломатериал" in _mats,
+     "ведомость не разделяет утеплитель и пиломатериал")
+true(not any(r["material"] == "утеплитель" for r in bom(ins.members, "пиломатериал")),
+     "утеплитель попал в ведомость пиломатериалов")
+
 plain = build_house({"plan": {"length": 9.0, "width": 7.0}, "ext_stud": "38x140"})
 true(not any(m.kind in ("insulation", "cladding") for m in plain.members),
      "по умолчанию слои оболочки строиться не должны")
