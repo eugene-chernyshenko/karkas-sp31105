@@ -116,7 +116,8 @@ _geo = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                     "openings": [
                         {"wall": "S", "u": 0.8, "width": 1.5, "height": 1.4, "sill": 0.8},
                         {"wall": "S", "u": 3.0, "width": 1.0, "height": 2.1, "type": "door"},
-                        {"wall": "W", "u": 2.2, "width": 1.2, "height": 1.4, "sill": 0.8}]})
+                        {"wall": "W", "u": 0.8, "width": 1.2, "height": 1.4,
+                         "sill": 0.8}]})   # не 2.2: перегородка pos=3.0 придёт в проём
 true(not _geo.errors, f"контрольный дом для геометрии даёт ✗: {_geo.errors}")
 _walls = [m for m in _geo.members
           if m.group in ("02_Стены_1", "03_Внутренние_стены")]
@@ -274,6 +275,24 @@ for k in ("sheathing_ext", "sheathing_int", "insulation", "vapour", "cladding",
     true(k in lk, f"слой {k} не построен при layers='all'")
 true(any("теплотехнич" in f[2] and f[0] == "WARN" for f in lay.findings),
      "нет предупреждения, что толщина утеплителя требует расчёта")
+# 7.2.12: перегородка не должна приходить в проём несущей стены
+_win = {"wall": "W", "u": 2.2, "width": 1.2, "height": 1.5, "sill": 0.8, "type": "window"}
+_hit = build_house({"plan": {"length": 6.0, "width": 6.0}, "openings": [_win],
+                    "interior_walls": [{"axis": "x", "pos": 3.0, "bearing": True}]})
+true(any(f[0] == "ERR" and "примыкание к W" in f[1] for f in _hit.findings),
+     "перегородка пришла в окно стены W, а ✗ не выдан (7.2.12)")
+_ok = build_house({"plan": {"length": 6.0, "width": 6.0},
+                   "openings": [dict(_win, u=0.8)],
+                   "interior_walls": [{"axis": "x", "pos": 3.0, "bearing": True}]})
+true(not any("примыкание" in f[1] for f in _ok.findings),
+     "окно отодвинуто от примыкания, а ✗ всё равно выдан")
+# перегородка, не доходящая до наружной стены, примыканием не считается
+_short = build_house({"plan": {"length": 6.0, "width": 6.0}, "openings": [_win],
+                      "interior_walls": [{"axis": "x", "pos": 3.0, "from": 2.0,
+                                          "to": 4.0, "bearing": False}]})
+true(not any("примыкание" in f[1] for f in _short.findings),
+     "перегородка не доходит до стены W — примыкания нет, ✗ лишний")
+
 # утеплитель: проёмы, слои по глубине, смещение швов, перегородки
 ins = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                    "wall_height": 2.5,

@@ -1330,6 +1330,30 @@ def build_house(user_spec: dict | None = None) -> Result:
             origin = (iw["pos"], iw.get("from", t_ext))
             d, n = (0, 1, 0), (-1, 0, 0)
             wlen = iw.get("to", W - t_ext) - origin[1]
+        # --- 7.2.12: примыкание перегородки не может попасть в проём ---
+        # Все схемы рис. 7-3 (на двух, трёх, одной стойке, через распорки) требуют
+        # стоек в несущей стене. В проёме стоек нет — прибивать не к чему.
+        _t_int = R.sec(istud)[1] / 1000.0
+        if iw["axis"] == "x":
+            _ends = [("W", origin[0] <= t_ext + 1e-6), ("E", origin[0] + wlen >= L - t_ext - 1e-6)]
+            _ju = (iw["pos"] - t_ext, iw["pos"] + _t_int - t_ext)
+        else:
+            _ends = [("S", origin[1] <= t_ext + 1e-6), ("N", origin[1] + wlen >= W - t_ext - 1e-6)]
+            _ju = (iw["pos"], iw["pos"] + _t_int)
+        for _tag, _touches in _ends:
+            if not _touches:
+                continue
+            for _o in ops_by_wall.get(_tag, []):
+                _a, _b = _o["u"], _o["u"] + _o["width"]
+                if min(_ju[1], _b) - max(_ju[0], _a) > 1e-6:
+                    res.err(f"внутренняя стена {i}/примыкание к {_tag}",
+                            f"7.2.12 и рис. 7-3: перегородка приходит в стену {_tag} на "
+                            f"{_ju[0]:.2f}…{_ju[1]:.2f} м — это внутри проёма "
+                            f"{_a:.2f}…{_b:.2f} м ({_o['type']}). Все схемы примыкания "
+                            f"требуют стоек в несущей стене, в проёме их нет "
+                            f"(табл. 7-2: гвозди 80 мм с шагом 750 мм в примыканиях). "
+                            f"Сдвиньте перегородку или проём")
+
         _iw_info = frame_wall(res, origin=origin, d=d, n=n, length=wlen, z_base=z_floor,
                    stud=istud,
                    spacing_mm=isp, height=H, group="03_Внутренние_стены",
