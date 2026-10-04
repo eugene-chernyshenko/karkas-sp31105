@@ -313,6 +313,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         этого наружные слои не доходят до угла: остаётся полоса голого каркаса,
         а для водовоздухозащитного слоя это ещё и разрыв вопреки 9.3.1.4.
         """
+        thick_in = thick_mm
         thick_mm = _up(thick_mm)
         half = thick_mm * MM / 2
         c = offset + half
@@ -320,6 +321,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         u_a, u_b = inset - lap, (length or L) - inset + lap
         rects = _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes)
         sw, sh, stag = cfg or (_sw, _sh, True)
+        _sheet_of: dict = {}
         if sheet and sw > 0 and sh > 0:
             import math
             z_lo, z_hi = zc - h / 2, zc + h / 2
@@ -334,10 +336,12 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                         continue
                     edges = _cols(ra, rb, sw, wall["stud_axes"],
                                   0.5 if (stag and k % 2) else 1.0)
+                    _cell = {}
                     for p, q in zip(edges, edges[1:]):
                         xa, xb = max(ra, p), min(rb, q)
                         if xb - xa > 1e-6:
                             bands.setdefault((round(ca, 6), round(cb, 6)), []).append([xa, xb])
+                            _cell[(round(xa, 6), round(xb, 6))] = (k, round(p, 3))
             out = []
             for (ca, cb), band in bands.items():
                 # Склейка по всему ряду, а не внутри полосы между проёмами:
@@ -356,6 +360,9 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                     else:
                         i += 1
                 out += [(xa, xb, ca, cb) for xa, xb in band]
+                for xa, xb in band:
+                    _sheet_of[(round(xa, 6), round(xb, 6), round(ca, 6))] = \
+                        _cell.get((round(xa, 6), round(xb, 6)), (0, round(xa, 3)))
             rects = out
         if roll and _rw > 0:
             z_lo, z_hi = zc - h / 2, zc + h / 2
@@ -386,9 +393,14 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
             rzc, rh = (rz1 + rz2) / 2, rz2 - rz1
             p1 = (o[0] + d[0] * ra - n[0] * rc, o[1] + d[1] * ra - n[1] * rc, rzc)
             p2 = (o[0] + d[0] * rb - n[0] * rc, o[1] + d[1] * rb - n[1] * rc, rzc)
+            _meta = {"th_mm": float(thick_in)}
+            if mat:
+                _meta["material"] = mat
+            _sid = _sheet_of.get((round(ra, 6), round(rb, 6), round(rz1, 6)))
+            if _sid is not None:
+                _meta["sheet"] = (group, kind, _sid[0], _sid[1])
             add(Member(kind, label, (thick_mm, int(round(rh * 1000))),
-                       p1, p2, n, col or group, note,
-                       meta={"material": mat} if mat else {}))
+                       p1, p2, n, col or group, note, meta=_meta))
 
     # --- наружная защитная обшивка каркаса ---
     mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)

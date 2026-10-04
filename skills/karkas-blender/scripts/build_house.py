@@ -79,7 +79,11 @@ def write_outputs(res, out_prefix: str, spec: dict | None = None) -> dict:
         w.writeheader()
         w.writerows(rows)
     if spec is not None:
-        from karkas.model import fasteners
+        from karkas.model import fasteners, purchase
+        with open(out_prefix + "_purchase.csv", "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "unit", "count", "note"])
+            w.writeheader()
+            w.writerows(purchase(res, spec))
         fr = fasteners(res, spec)
         with open(out_prefix + "_fasteners.csv", "w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["name", "size", "count", "note"])
@@ -92,6 +96,7 @@ def write_outputs(res, out_prefix: str, spec: dict | None = None) -> dict:
                    for m in res.members], f, ensure_ascii=False, indent=1)
     return {"report": out_prefix + "_report.txt", "bom": out_prefix + "_bom.csv",
             "fasteners": out_prefix + "_fasteners.csv",
+            "purchase": out_prefix + "_purchase.csv",
             "members": out_prefix + "_members.json", "text": rep}
 
 

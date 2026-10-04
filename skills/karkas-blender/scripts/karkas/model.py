@@ -1582,6 +1582,126 @@ def bom(members: list[Member], material: str | None = None) -> list[dict]:
     return rows
 
 
+# Длина покупной доски, м — то, чем режут на стройке.
+STOCK_LEN_M = 6.0
+# Плита утеплителя и рулон плёнки/ленты — ходовые размеры, СП их не нормирует.
+INSUL_PLATE = (1.0, 0.6)      # м
+FILM_ROLL = (1.5, 50.0)       # ширина х длина, м
+TAPE_ROLL = 50.0              # м
+
+
+def _ffd(lengths: list[float], stock: float) -> tuple[int, float]:
+    """Сколько досок длиной stock нужно и сколько уйдёт в отход, м.
+
+    Первый подходящий с убыванием (FFD) — так и пилят: длинное сперва.
+    """
+    bins: list[float] = []
+    for ln in sorted(lengths, reverse=True):
+        if ln > stock + 1e-9:
+            bins.append(0.0)                      # длиннее доски — сращивать
+            continue
+        for i, rest in enumerate(bins):
+            if rest >= ln - 1e-9:
+                bins[i] = rest - ln
+                break
+        else:
+            bins.append(stock - ln)
+    return len(bins), sum(bins)
+
+
+def purchase(res: Result, spec: dict) -> list[dict]:
+    """Закупочная ведомость: доски, листы, плиты, рулоны — в штуках.
+
+    Ведомость bom() даёт чистовые куски; здесь считается, что покупать.
+    Отход — остаток досок и площадь листов, не ушедшая в дело.
+    """
+    import math
+    lay = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
+    out = []
+
+    # --- пиломатериал: раскрой на доску STOCK_LEN_M ---
+    stock = float(lay.get("stock_len_m", STOCK_LEN_M))
+    by_sec: dict[str, list[float]] = {}
+    for m in res.members:
+        if m.meta.get("schematic") or m.meta.get("panel"):
+            continue
+        if MATERIAL.get(m.kind, "пиломатериал") != "пиломатериал":
+            continue
+        by_sec.setdefault(m.sec_str, []).append(m.length)
+    for sec, lens in sorted(by_sec.items(), key=lambda kv: -sum(kv[1])):
+        n, waste = _ffd(lens, stock)
+        used = sum(lens)
+        out.append({"name": f"Доска {sec}", "unit": f"шт по {stock:g} м", "count": n,
+                    "note": f"в дело {used:.1f} пог. м, отход {waste:.1f} пог. м "
+                            f"({waste / (n * stock) * 100 if n else 0:.0f} %), "
+                            f"кусков {len(lens)}"})
+
+    # --- листовые: по разметке, лист целиком ---
+    sheets: dict[tuple, dict] = {}
+    for m in res.members:
+        sid = m.meta.get("sheet")
+        if not sid:
+            continue
+        e = sheets.setdefault((sid[1], m.meta.get("th_mm", m.section[0])),
+                              {"area": 0.0, "ids": set()})
+        e["area"] += m.length * m.section[1] / 1000.0
+        e["ids"].add(sid)
+    names = {"sheet_ext": "ОСП", "sheathing_ext": "ОСП", "sheathing_int": "ГКЛ"}
+    for (kind, th), e in sheets.items():
+        if kind == "sheathing_int":
+            sm = sorted(float(v) for v in lay.get("sheet_int_mm", layers.SHEET_INT_MM))
+        else:
+            sm = sorted(float(v) for v in lay.get("sheet_mm", layers.SHEET_MM))
+        area1 = sm[0] * sm[1] / 1e6
+        n = len(e["ids"])
+        out.append({"name": f"{names.get(kind, kind)} {th:g} мм "
+                            f"{int(sm[1])}x{int(sm[0])}",
+                    "unit": "лист", "count": n,
+                    "note": f"в дело {e['area']:.1f} м² из {n * area1:.1f} м², "
+                            f"отход {100 - e['area'] / (n * area1) * 100 if n else 0:.0f} % "
+                            f"(обрезки не переиспользуются)"})
+
+    # --- утеплитель: плиты, по толщинам отдельно (они невзаимозаменяемы) ---
+    pl = INSUL_PLATE[0] * INSUL_PLATE[1]
+    by_th: dict[tuple, dict] = {}
+    for m in res.members:
+        if m.kind != "insulation":
+            continue
+        where = "чердака" if m.group.endswith("чердака") else "стен"
+        pan = m.meta.get("panel")
+        # плита перекрытия задана как panel (L, W, t) — у неё section[1] == 1 мм
+        a = pan[0] * pan[1] if pan else m.length * m.section[1] / 1000.0
+        v = pan[0] * pan[1] * pan[2] if pan else m.volume
+        th = int(round(pan[2] * 1000)) if pan else m.section[0]
+        e = by_th.setdefault((where, th), {"area": 0.0, "vol": 0.0})
+        e["area"] += a
+        e["vol"] += v
+    for (where, th), e in sorted(by_th.items(), key=lambda kv: (kv[0][0], -kv[1]["area"])):
+        out.append({"name": f"Утеплитель {where} {th} мм",
+                    "unit": f"плита {int(INSUL_PLATE[0] * 1000)}x{int(INSUL_PLATE[1] * 1000)}",
+                    "count": math.ceil(e["area"] / pl),
+                    "note": f"в дело {e['area']:.1f} м², объём {e['vol']:.3f} м³"})
+
+    # --- плёнки и лента: рулоны ---
+    for kind, label in (("windproof", "Ветрозащита"), ("vapour", "Пароизоляция")):
+        f = [m for m in res.members if m.kind == kind]
+        if not f:
+            continue
+        area = sum(m.length * m.section[1] / 1000.0 for m in f)
+        roll = FILM_ROLL[0] * FILM_ROLL[1]
+        out.append({"name": label,
+                    "unit": f"рулон {FILM_ROLL[0]:g}x{FILM_ROLL[1]:g} м",
+                    "count": math.ceil(area / roll),
+                    "note": f"в дело {area:.1f} м² (с нахлёстом); рулон {roll:.0f} м²"})
+    tp = [m for m in res.members if m.kind == "tape"]
+    if tp:
+        ln = sum(m.length for m in tp)
+        out.append({"name": "Лента по швам", "unit": f"рулон {TAPE_ROLL:g} м",
+                    "count": math.ceil(ln / TAPE_ROLL),
+                    "note": f"в дело {ln:.1f} пог. м"})
+    return out
+
+
 def fasteners(res: Result, spec: dict) -> list[dict]:
     """Ведомость крепежа по табл. 7-2, 7-5, 8-1 и п. 6.2.8.4.
 
@@ -1729,6 +1849,15 @@ def report(res: Result, spec: dict | None = None) -> str:
                          f"{r['count']:>5}{r[key]:>8.3f}")
         lines.append("")
     if spec is not None:
+        pr = purchase(res, spec)
+        if pr:
+            lines.append("ЗАКУПКА — что брать")
+            lines.append("-" * 72)
+            lines.append(f"{'Наименование':<34}{'Единица':>22}{'Шт':>6}")
+            for r in pr:
+                lines.append(f"{r['name'][:33]:<34}{r['unit']:>22}{r['count']:>6}")
+                lines.append(f"    {r['note']}")
+            lines.append("")
         fr = fasteners(res, spec)
         if fr:
             lines.append(f"КРЕПЁЖ — {sum(r['count'] for r in fr)} шт (в модели не рисуется)")

@@ -329,6 +329,28 @@ true(all(_gr[a] <= _gr[b] or _gr[b] <= _gr[a] for a, b in zip(_gk2, _gk2[1:])),
 true(any("6.4.6" in f[2] for f in _gi.findings),
      "в отчёте должно быть сказано, что вразбежку для ГКЛ СП не требует")
 
+# закупочная ведомость: доски, листы, плиты, рулоны
+from karkas.model import purchase, _ffd                             # noqa: E402
+eq(_ffd([2.5, 2.5, 1.0], 6.0), (1, 0.0), "FFD: три куска должны лечь в одну доску")
+eq(_ffd([3.5, 3.5], 6.0)[0], 2, "FFD: два куска по 3,5 м в одну доску не влезут")
+_pspec = {"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+          "layers": {"wall_sheathing_ext": True, "wall_sheathing_int": True,
+                     "wall_insulation": True, "windproof": True, "vapour_barrier": True,
+                     "attic_insulation": True, "attic_insulation_mm": 200}}
+_pr = purchase(build_house(_pspec), _pspec)
+_by = {r["name"]: r for r in _pr}
+true(any(n.startswith("Доска 38x140") for n in _by),
+     "в закупке нет доски 38x140")
+true(all(r["count"] > 0 for r in _pr),
+     f"нулевое количество в закупке: {[r['name'] for r in _pr if r['count'] <= 0]}")
+_att = [r for n, r in _by.items() if "чердака" in n]
+true(_att and _att[0]["count"] > 10,
+     f"утеплитель чердака 6x6x200 мм не может быть {_att[0]['count'] if _att else 0} плит")
+true(any("9.5" in n for n in _by), f"толщина ОСП округлена в закупке: {list(_by)}")
+true(any("12.5" in n for n in _by), f"толщина ГКЛ округлена в закупке: {list(_by)}")
+_ins = [n for n in _by if n.startswith("Утеплитель стен")]
+true(len(_ins) > 1, "плиты разной толщины смешаны в одну позицию")
+
 # каждый слой оболочки — в своей коллекции, иначе его не выключить
 _col = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                     "layers": "all"})
