@@ -13,6 +13,33 @@
 
 ---
 
+## Требования
+
+| | Нужно | Для чего |
+|---|---|---|
+| **Python 3.11+** | обязательно | проверка по нормам, подбор сечений, ведомость. Сторонних пакетов нет |
+| **Blender 4.5 LTS+** | только для 3D | построение геометрии, `.blend`, рендеры. Используется штатный `bpy`, ставить ничего не нужно |
+
+Всё, что не требует геометрии (режим `--check`), работает без Blender за секунды.
+
+`blender` часто не прописан в PATH — подставляйте полный путь:
+
+| ОС | Путь |
+|---|---|
+| macOS | `/Applications/Blender.app/Contents/MacOS/Blender` |
+| Linux | `blender` или `/usr/bin/blender` (пакет `blender`) |
+| Windows | `"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"` |
+
+Проверка, что всё на месте:
+
+```bash
+python3 skills/karkas-blender/scripts/selftest.py
+# OK — все проверки пройдены (248 элементов в эталонной модели)
+```
+
+Самопроверка сверяет ~35 контрольных значений прямо из таблиц СП и собирает эталонный
+дом. Blender для неё не нужен — если она прошла, расчётная часть исправна.
+
 ## Быстрый старт
 
 ```bash
@@ -36,8 +63,7 @@ python3 $K/scripts/build_house.py --check --out out/d \
     --set roof.slope=1:1.71 --set stud_spacing=400 --set storeys=2
 ```
 
-Зависимостей нет: `rules.py` / `model.py` — чистый Python 3.11+, `bpy` нужен только
-для построения геометрии. Проверено на Blender 4.5 LTS.
+На macOS вместо `blender` подставьте полный путь (см. [Требования](#требования)).
 
 ## Что получается
 
@@ -139,12 +165,6 @@ skills/karkas-blender/
     examples/dom_9x7.json               рабочий пример
 ```
 
-Самопроверка сверяет ~35 контрольных значений прямо из таблиц СП и собирает эталонный дом:
-
-```bash
-python3 skills/karkas-blender/scripts/selftest.py
-```
-
 ## Установка в Claude Code
 
 ### Как плагин (рекомендуется)
@@ -176,6 +196,16 @@ ln -s "$PWD/skills/karkas-blender" ~/.claude/skills/karkas-blender
 
 Каталог скилла самодостаточен и работает из любого места. В клонированном репозитории
 skill виден сразу — `.claude/skills/karkas-blender` ссылается на `skills/karkas-blender`.
+
+Что стоит знать:
+
+- **Windows:** `.claude/skills/karkas-blender` — git-симлинк. Без включённого developer mode
+  или `git config --global core.symlinks true` он склонируется обычным файлом и skill
+  в репозитории не подхватится. Ставьте плагином либо копируйте `skills/karkas-blender`
+  вручную.
+- Если поставить плагин **и** работать внутри этого репозитория, skill загрузится дважды —
+  как `karkas-blender` и как `karkas-sp31105:karkas-blender`. Имена разные, конфликта нет,
+  но ~230 лишних токенов в каждой сессии. В других проектах такого не будет.
 
 ## Лицензия
 
