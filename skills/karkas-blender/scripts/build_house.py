@@ -104,24 +104,41 @@ def resolve_spec(path: str) -> str:
 BLENDER_APP = "/Applications/Blender.app/Contents/MacOS/Blender"
 
 
-def ensure_open(blend: str) -> str:
-    """Открыть .blend в GUI, если ни один инстанс Blender его ещё не держит."""
+def blender_gui_pids(blend: str) -> list[str]:
+    """PID GUI-процессов Blender, у которых открыт именно этот файл."""
     import subprocess
     try:
-        ps = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True).stdout
+        out = subprocess.run(["ps", "-axo", "pid=,command="],
+                             capture_output=True, text=True).stdout
     except OSError:
-        ps = ""
-    if any(blend in line and "-b" not in line.split() for line in ps.splitlines()):
-        return f"уже открыт в Blender: {blend}"
+        return []
+    pids = []
+    for line in out.splitlines():
+        line = line.strip()
+        if "Blender" not in line or "/MacOS/Blender" not in line and "blender" not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 2 or "-b" in parts or "--background" in parts:
+            continue
+        if blend in line:
+            pids.append(parts[0])
+    return pids
+
+
+def ensure_open(blend: str) -> str:
+    """Открыть .blend в GUI, если ни один GUI-инстанс его не держит."""
+    import subprocess
+    pids = blender_gui_pids(blend)
+    if pids:
+        return f"уже открыт в Blender (pid {', '.join(pids)}): {blend}"
     if sys.platform == "darwin" and os.path.exists("/Applications/Blender.app"):
         cmd = ["open", "-na", "/Applications/Blender.app", "--args", blend]
     else:
-        exe = os.environ.get("BLENDER", "blender")
-        cmd = [exe, blend]
+        cmd = [os.environ.get("BLENDER", "blender"), blend]
     try:
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
-        return f"открыт в Blender: {blend}"
+        return f"запущен Blender с файлом: {blend}"
     except OSError as e:
         return f"не удалось открыть Blender ({e}); откройте вручную: {blend}"
 

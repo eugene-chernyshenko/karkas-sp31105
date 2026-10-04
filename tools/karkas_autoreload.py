@@ -14,7 +14,9 @@ import bpy
 
 INTERVAL = 1.5          # период опроса, с
 LOG = os.path.join(os.path.expanduser("~"), ".cache", "karkas", "autoreload.log")
-_state = {"path": None, "mtime": None, "skipped_dirty": False}
+_state = {"path": None, "sig": None, "pending": None, "pending_since": 0.0,
+          "skipped_dirty": False}
+SETTLE = 1.0            # сколько секунд файл должен не меняться перед перезагрузкой
 
 
 def _report(msg: str):
@@ -25,33 +27,47 @@ def _report(msg: str):
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
     except OSError:
         pass
-    wm = bpy.context.window_manager
-    for win in getattr(wm, "windows", []):
+    wm = getattr(bpy.context, "window_manager", None)
+    for win in getattr(wm, "windows", []) or []:
         for area in win.screen.areas:
             if area.type == "VIEW_3D":
                 area.header_text_set(msg)
                 return
 
 
+def _sig(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return None
+
+
 def _tick():
     path = bpy.data.filepath
-    if not path or not os.path.exists(path):
-        _state.update(path=None, mtime=None)
+    if not path:
+        _state.update(path=None, sig=None, pending=None)
         return INTERVAL
-
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
+    sig = _sig(path)
+    if sig is None:
         return INTERVAL
 
     if _state["path"] != path:
-        _state.update(path=path, mtime=mtime, skipped_dirty=False)
+        _state.update(path=path, sig=sig, pending=None, skipped_dirty=False)
+        return INTERVAL
+    if sig == _state["sig"]:
         return INTERVAL
 
-    if _state["mtime"] is None or mtime <= _state["mtime"]:
+    # файл изменился — ждём, пока запись завершится (размер и mtime перестанут меняться)
+    now = time.monotonic()
+    if _state["pending"] != sig:
+        _state.update(pending=sig, pending_since=now)
+        return INTERVAL
+    if now - _state["pending_since"] < SETTLE:
         return INTERVAL
 
-    # файл пересобран на диске
+    _state.update(sig=sig, pending=None)
+
     if bpy.data.is_dirty:
         if not _state["skipped_dirty"]:
             _report("файл пересобран, но в сцене есть несохранённые правки — "
@@ -59,11 +75,11 @@ def _tick():
             _state["skipped_dirty"] = True
         return INTERVAL
 
-    _state.update(mtime=mtime, skipped_dirty=False)
+    _state["skipped_dirty"] = False
     try:
         bpy.ops.wm.revert_mainfile()
         _report(f"модель перезагружена: {os.path.basename(path)}")
-    except RuntimeError as e:
+    except Exception as e:                                    # noqa: BLE001
         _report(f"не удалось перезагрузить: {e}")
     return INTERVAL
 
@@ -71,9 +87,8 @@ def _tick():
 @bpy.app.handlers.persistent
 def _on_load(_dummy):
     path = bpy.data.filepath
-    _state.update(path=path or None,
-                  mtime=os.path.getmtime(path) if path and os.path.exists(path) else None,
-                  skipped_dirty=False)
+    _state.update(path=path or None, sig=_sig(path) if path else None,
+                  pending=None, skipped_dirty=False)
 
 
 def register():
