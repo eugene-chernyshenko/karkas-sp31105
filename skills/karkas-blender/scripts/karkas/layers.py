@@ -29,6 +29,12 @@ LAYER_DEFAULTS = {
 # Толщина утеплителя по умолчанию, мм — НЕ норматив, требует теплотехнического расчёта
 DEFAULT_ATTIC_INSULATION_MM = 250
 
+# Утеплитель — в своём слое, а не в слое стены/крыши: иначе выключатель крыши
+# прячет и утеплитель чердачного перекрытия, а посмотреть на один утеплитель
+# отдельно от каркаса нельзя.
+G_INSULATION = "11_Утеплитель_стен"
+G_INSULATION_ATTIC = "12_Утеплитель_чердака"
+
 
 def resolve(spec: dict) -> dict:
     """spec['layers'] -> полный словарь выключателей. Допускается 'all' / 'none'."""
@@ -116,7 +122,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
             p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
             p2 = (o[0] + d[0] * u2 - n[0] * c, o[1] + d[1] * u2 - n[1] * c, zc)
             add(Member("insulation", f"Утеплитель {int(depth * 1000)} мм", 
-                       (int(depth * 1000), int(round(h * 1000))), p1, p2, n, group,
+                       (int(depth * 1000), int(round(h * 1000))), p1, p2, n, G_INSULATION,
                        "9.2.2.2 «а»: в пространстве между стойками, обвязками и обшивками; "
                        "λ ≤0,10 Вт/(м·°C) (9.2.2.1). Толщина = глубине каркаса, "
                        "достаточность проверяется теплотехническим расчётом (9.2.1.2)"))
@@ -182,7 +188,7 @@ def platform_layers(res, spec: dict, on: dict, plat: dict, group: str,
                    if isinstance(spec.get("layers"), dict) else DEFAULT_ATTIC_INSULATION_MM)
         add(Member("insulation", f"Утеплитель чердачного перекрытия {t_mm} мм", (t_mm, 1),
                    (0, W / 2, z_joist_bottom + t_mm * MM / 2),
-                   (L, W / 2, z_joist_bottom + t_mm * MM / 2), (0, 0, 1), group,
+                   (L, W / 2, z_joist_bottom + t_mm * MM / 2), (0, 0, 1), G_INSULATION_ATTIC,
                    "9.2: толщина определяется теплотехническим расчётом по ГСОП "
                    "(9.2.1.2, СНиП II-3 / СП 23-101); над утеплителем оставить "
                    "вентилируемое пространство ≥60 мм (8.7.11)",
@@ -217,7 +223,7 @@ def roof_layers(res, spec: dict, on: dict, info: dict, group: str) -> None:
                    if isinstance(lay, dict) else DEFAULT_ATTIC_INSULATION_MM)
         z = info["z_ceiling_bottom"] + t_mm * MM / 2
         add(Member("insulation", f"Утеплитель чердачного перекрытия {t_mm} мм", (t_mm, 1),
-                   (0, W / 2, z), (L, W / 2, z), (0, 0, 1), group,
+                   (0, W / 2, z), (L, W / 2, z), (0, 0, 1), G_INSULATION_ATTIC,
                    "9.2: над утеплителем оставить вентилируемое пространство ≥60 мм (8.7.11); "
                    "укладывать так, чтобы не перекрывать продухи",
                    meta={"panel": (L, W, t_mm * MM)}))
