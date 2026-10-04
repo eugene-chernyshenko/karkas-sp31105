@@ -1432,19 +1432,33 @@ def build_house(user_spec: dict | None = None) -> Result:
 # --------------------------------------------------------------------------
 # Спецификация материалов
 # --------------------------------------------------------------------------
-def bom(members: list[Member]) -> list[dict]:
-    """Ведомость пиломатериалов: группировка по названию/сечению/длине."""
+# Не пиломатериал, хотя и строится брусками по ячейкам каркаса, — в общий объём
+# доски и бруса такое мешать нельзя.
+MATERIAL = {"insulation": "утеплитель"}
+
+
+def bom(members: list[Member], material: str | None = None) -> list[dict]:
+    """Ведомость: группировка по названию/сечению/длине.
+
+    material — оставить только этот материал ('пиломатериал' | 'утеплитель');
+    None — все, с колонкой material у каждой строки.
+    """
     acc: dict[tuple, dict] = {}
     for m in members:
         if m.meta.get("schematic") or m.meta.get("panel"):
             continue
-        key = (m.label.split(" (")[0], m.sec_str, round(m.length, 2))
-        e = acc.setdefault(key, {"name": key[0], "section": key[1], "length_m": key[2],
+        mat = MATERIAL.get(m.kind, "пиломатериал")
+        if material is not None and mat != material:
+            continue
+        key = (mat, m.label.split(" (")[0], m.sec_str, round(m.length, 2))
+        e = acc.setdefault(key, {"material": mat, "name": key[1], "section": key[2],
+                                 "length_m": key[3],
                                  "count": 0, "total_m": 0.0, "volume_m3": 0.0})
         e["count"] += 1
         e["total_m"] += m.length
         e["volume_m3"] += m.volume
-    rows = sorted(acc.values(), key=lambda r: (-r["volume_m3"], r["name"]))
+    rows = sorted(acc.values(),
+                  key=lambda r: (r["material"] != "пиломатериал", -r["volume_m3"], r["name"]))
     for r in rows:
         r["total_m"] = round(r["total_m"], 2)
         r["volume_m3"] = round(r["volume_m3"], 4)
@@ -1470,13 +1484,18 @@ def report(res: Result) -> str:
     for k, v in res.levels.items():
         lines.append(f"  {k}: {v:.3f}")
     lines.append("")
-    rows = bom(res.members)
-    total_v = sum(r["volume_m3"] for r in rows)
-    total_n = sum(r["count"] for r in rows)
-    lines.append(f"ВЕДОМОСТЬ ПИЛОМАТЕРИАЛОВ — {total_n} шт, {total_v:.3f} м³")
-    lines.append("-" * 72)
-    lines.append(f"{'Наименование':<46}{'Сечение':>9}{'Длина':>7}{'Шт':>5}{'м³':>8}")
-    for r in rows:
-        lines.append(f"{r['name'][:45]:<46}{r['section']:>9}{r['length_m']:>7.2f}"
-                     f"{r['count']:>5}{r['volume_m3']:>8.3f}")
-    return "\n".join(lines)
+    for title, mat in (("ВЕДОМОСТЬ ПИЛОМАТЕРИАЛОВ", "пиломатериал"),
+                       ("УТЕПЛИТЕЛЬ (по ячейкам каркаса)", "утеплитель")):
+        rows = bom(res.members, mat)
+        if not rows:
+            continue
+        total_v = sum(r["volume_m3"] for r in rows)
+        total_n = sum(r["count"] for r in rows)
+        lines.append(f"{title} — {total_n} шт, {total_v:.3f} м³")
+        lines.append("-" * 72)
+        lines.append(f"{'Наименование':<46}{'Сечение':>9}{'Длина':>7}{'Шт':>5}{'м³':>8}")
+        for r in rows:
+            lines.append(f"{r['name'][:45]:<46}{r['section']:>9}{r['length_m']:>7.2f}"
+                         f"{r['count']:>5}{r['volume_m3']:>8.3f}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"

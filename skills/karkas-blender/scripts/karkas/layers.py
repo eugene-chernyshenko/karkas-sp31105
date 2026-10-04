@@ -53,10 +53,17 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
 
     Считается точно по проекции всех построенных элементов стены в её плоскость,
     поэтому утеплитель гарантированно не пересекается со стойками, обвязками,
-    перемычками и укороченными стойками.
+    перемычками и укороченными стойками. Проёмы вычитаются отдельно — дерева
+    в них нет, но и пустотой каркаса они не являются.
     """
     z0, z1 = wall["z_bottom_plate_top"], wall["z_stud_top"]
-    solids = [s for s in wall.get("solids", []) if s[3] > z0 + 1e-6 and s[2] < z1 - 1e-6]
+    blocked = list(wall.get("solids", []))
+    # Проём — не пустота каркаса: окно и дверь утеплять нечем. Без этого сюда
+    # попадала плита от подоконной доски до перемычки и закрывала проём.
+    for op in wall.get("openings", []):
+        blocked.append((op["u"], op["u"] + op["width"],
+                        z0 + op["sill"], z0 + op["head"]))
+    solids = [s for s in blocked if s[3] > z0 + 1e-6 and s[2] < z1 - 1e-6]
     edges = sorted({round(v, 6) for s in solids for v in (s[0], s[1])}
                    | {0.0, round(wall["length"], 6)})
     out = []

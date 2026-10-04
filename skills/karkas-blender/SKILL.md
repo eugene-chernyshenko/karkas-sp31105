@@ -30,7 +30,8 @@ python3 $KARKAS/scripts/build_house.py --spec dom_9x7 --out out/dom --check
 Быстрые правки без файла спецификации:
 `--set plan.width=8 --set roof.slope=1:1.71 --set snow_kpa=2.0 --set stud_spacing=400`
 
-Выход: `out/<имя>.blend`, `_report.txt` (проверка + принятые сечения + отметки + ведомость),
+Выход: `out/<имя>.blend`, `_report.txt` (проверка + принятые сечения + отметки + ведомость
+пиломатериалов и отдельно утеплителя — мешать их объёмы нельзя),
 `_bom.csv`, `_members.json`, `_<ракурс>.png`.
 
 **Всегда смотри `_report.txt` и пересказывай пользователю строки `✗` и `!`** — это нарушения
