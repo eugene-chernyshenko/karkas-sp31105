@@ -276,6 +276,29 @@ for k in ("sheathing_ext", "sheathing_int", "insulation", "vapour", "cladding",
     true(k in lk, f"слой {k} не построен при layers='all'")
 true(any("теплотехнич" in f[2] and f[0] == "WARN" for f in lay.findings),
      "нет предупреждения, что толщина утеплителя требует расчёта")
+# листовые слои не перекрывают проёмы
+_sh = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                   "layers": {"wall_sheathing_ext": True, "wall_sheathing_int": True,
+                              "vapour_barrier": True, "windproof": True},
+                   "openings": [{"wall": "S", "u": 0.8, "width": 1.5, "height": 1.5,
+                                 "sill": 0.8, "type": "window"}]})
+_z0 = _sh.levels["floor_1"] + 0.038
+_hole = (0.8, 2.3, _z0 + 0.8, _z0 + 2.3)
+_over = []
+for m in _sh.members:
+    if m.kind not in ("sheathing_ext", "sheathing_int", "vapour", "windproof"):
+        continue
+    if abs(m.p1[1] - m.p2[1]) > 1e-6 or m.p1[1] > 0.3:    # только стена S
+        continue
+    u1, u2 = sorted((m.p1[0], m.p2[0]))
+    h = m.section[1] / 1000.0
+    z1, z2 = m.p1[2] - h / 2, m.p1[2] + h / 2
+    if min(u2, _hole[1]) - max(u1, _hole[0]) > 1e-6 and min(z2, _hole[3]) - max(z1, _hole[2]) > 1e-6:
+        _over.append((m.kind, round(u1, 2), round(z1, 2)))
+true(not _over, f"обшивки и плёнки перекрывают проём: {_over[:4]}")
+true(sum(1 for m in _sh.members if m.kind == "sheathing_ext") > 1,
+     "наружная обшивка должна резаться по проёму на несколько кусков")
+
 # 9.3.2.8: ветрозащита и материал наружной обшивки
 _base = {"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140"}
 _osb = build_house({**_base, "layers": {"wall_insulation": True,

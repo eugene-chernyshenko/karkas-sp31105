@@ -103,6 +103,36 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
     return out
 
 
+def _face_rects(u_lo: float, u_hi: float, z_lo: float, z_hi: float,
+                holes: list[tuple[float, float, float, float]]
+                ) -> list[tuple[float, float, float, float]]:
+    """Прямоугольники плоскости стены за вычетом проёмов.
+
+    Обшивки, плёнки и облицовка идут листом по всей стене, но окно и дверь
+    они не перекрывают — лист вырезается по проёму.
+    """
+    holes = [h for h in holes if h[1] > u_lo and h[0] < u_hi and h[3] > z_lo and h[2] < z_hi]
+    if not holes:
+        return [(u_lo, u_hi, z_lo, z_hi)]
+    edges = sorted({u_lo, u_hi}
+                   | {min(max(h[i], u_lo), u_hi) for h in holes for i in (0, 1)})
+    out = []
+    for a, b in zip(edges, edges[1:]):
+        if b - a < 1e-6:
+            continue
+        mid = (a + b) / 2
+        spans = sorted((max(h[2], z_lo), min(h[3], z_hi))
+                       for h in holes if h[0] < mid < h[1])
+        cur = z_lo
+        for p1, p2 in spans:
+            if p1 > cur + 1e-6:
+                out.append((a, b, cur, p1))
+            cur = max(cur, p2)
+        if z_hi - cur > 1e-6:
+            out.append((a, b, cur, z_hi))
+    return out
+
+
 def _depth_layers(depth: float, layer: float) -> list[tuple[float, float]]:
     """Слои утеплителя по глубине каркаса, от наружной грани внутрь.
 
@@ -159,16 +189,24 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                      + (_th_int if on["wall_sheathing_int"] else 0.0)) if ext_through else 0.0
     add = res.members.append
 
+    _holes = [(op["u"], op["u"] + op["width"], z0 + op["sill"], z0 + op["head"])
+              for op in wall.get("openings", [])]
+
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0):
-        """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−)."""
+        """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
+
+        Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
+        """
         thick_mm = int(round(thick_mm))
         half = thick_mm * MM / 2
         c = offset + half
         u_a, u_b = inset, (length or L) - inset
-        p1 = (o[0] + d[0] * u_a - n[0] * c, o[1] + d[1] * u_a - n[1] * c, zc)
-        p2 = (o[0] + d[0] * u_b - n[0] * c, o[1] + d[1] * u_b - n[1] * c, zc)
-        add(Member(kind, label, (int(round(thick_mm)), int(round(h * 1000))),
-                   p1, p2, n, group, note))
+        for ra, rb, rz1, rz2 in _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes):
+            rzc, rh = (rz1 + rz2) / 2, rz2 - rz1
+            p1 = (o[0] + d[0] * ra - n[0] * c, o[1] + d[1] * ra - n[1] * c, rzc)
+            p2 = (o[0] + d[0] * rb - n[0] * c, o[1] + d[1] * rb - n[1] * c, rzc)
+            add(Member(kind, label, (thick_mm, int(round(rh * 1000))),
+                       p1, p2, n, group, note))
 
     # --- наружная защитная обшивка каркаса ---
     _lay0 = spec.get("layers") if isinstance(spec.get("layers"), dict) else {}
