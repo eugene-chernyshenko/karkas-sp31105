@@ -44,6 +44,10 @@ DEFAULT_LAYER_MM = 50
 # листов должны лежать над опорами, а 1250 при шаге 600 на стойку не попадает.
 SHEET_MM = (1200, 2500)
 
+# Рулон плёнки: ширина и нахлёст, мм. 9.3.3.2 требует нахлёста ≥100 мм; полотнища
+# кладут горизонтально, верхнее поверх нижнего.
+ROLL_MM = (1500, 100)
+
 MATERIAL_NAMES = {"osb": "ОСП", "plywood": "фанера", "lumber": "пиломатериал",
                   "dvp": "ДВП", "csp": "ЦСП", "gkl": "ГКЛ", "gvl": "ГВЛ"}
 
@@ -56,6 +60,12 @@ DEFAULT_SHEATHING_EXT = "osb"
 # Утеплитель — в своём слое, а не в слое стены/крыши: иначе выключатель крыши
 # прячет и утеплитель чердачного перекрытия, а посмотреть на один утеплитель
 # отдельно от каркаса нельзя.
+G_SHEATHING_EXT = "13_Обшивка_наружная"
+G_WINDPROOF = "14_Ветрозащита"
+G_VAPOUR = "15_Пароизоляция"
+G_SHEATHING_INT = "16_Обшивка_внутренняя"
+G_CLADDING = "17_Облицовка"
+
 G_INSULATION = "11_Утеплитель_стен"
 G_INSULATION_ATTIC = "12_Утеплитель_чердака"
 
@@ -220,9 +230,11 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
 
     _sheet = _lay0.get("sheet_mm", SHEET_MM)
     _sw, _sh = float(_sheet[0]) * MM, float(_sheet[1]) * MM
+    _roll = _lay0.get("roll_mm", ROLL_MM)
+    _rw, _rlap = float(_roll[0]) * MM, float(_roll[1]) * MM
 
     def slab(kind, label, thick_mm, offset, zc, h, note, length=None, inset=0.0,
-             wrap=False, sheet=False):
+             wrap=False, sheet=False, roll=False, col=None):
         """Плита по стене: offset — от наружной грани внутрь (+) / наружу (−).
 
         Режется по проёмам: окно и дверь обшивка и плёнки не перекрывают.
@@ -236,15 +248,34 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
         u_a, u_b = inset - lap, (length or L) - inset + lap
         rects = _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes)
-        if sheet and _sw > 0 and _sh > 0:
+        if roll and _rw > 0:
+            z_lo, z_hi = zc - h / 2, zc + h / 2
+            step = _rw - _rlap
+            bands, zb, i = [], z_lo, 0
+            while zb < z_hi - 1e-6:
+                bands.append((zb, min(zb + _rw, z_hi), i))
+                zb += step
+                i += 1
+            out = []
+            for ra, rb, rz1, rz2 in rects:
+                for ba, bb, bi in bands:
+                    ca, cb = max(rz1, ba), min(rz2, bb)
+                    if cb - ca > 1e-6:
+                        out.append((ra, rb, ca, cb, bi))
+            rects = out
+        elif sheet and _sw > 0 and _sh > 0:
             rects = [r for rect in rects
                      for r in _sheets(rect, _sw, _sh, 0.0, zc - h / 2, _sw / 2)]
-        for ra, rb, rz1, rz2 in rects:
+        for rect in rects:
+            ra, rb, rz1, rz2 = rect[:4]
+            # полотнище кладётся поверх нижнего, поэтому каждое следующее на 0,2 мм
+            # дальше наружу: иначе в зоне нахлёста два полотна в одной плоскости
+            rc = c - (rect[4] * 0.0002 if len(rect) > 4 else 0.0)
             rzc, rh = (rz1 + rz2) / 2, rz2 - rz1
-            p1 = (o[0] + d[0] * ra - n[0] * c, o[1] + d[1] * ra - n[1] * c, rzc)
-            p2 = (o[0] + d[0] * rb - n[0] * c, o[1] + d[1] * rb - n[1] * c, rzc)
+            p1 = (o[0] + d[0] * ra - n[0] * rc, o[1] + d[1] * ra - n[1] * rc, rzc)
+            p2 = (o[0] + d[0] * rb - n[0] * rc, o[1] + d[1] * rb - n[1] * rc, rzc)
             add(Member(kind, label, (thick_mm, int(round(rh * 1000))),
-                       p1, p2, n, group, note))
+                       p1, p2, n, col or group, note))
 
     # --- наружная защитная обшивка каркаса ---
     mat_ext = _lay0.get("sheathing_ext_material", DEFAULT_SHEATHING_EXT)
@@ -258,7 +289,8 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3 (жёсткость каркаса) и 10.4.4.2 (основание под облицовку); "
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам"
-             + (". " + _extra if _extra else ""), wrap=True, sheet=True)
+             + (". " + _extra if _extra else ""), wrap=True, sheet=True,
+             col=G_SHEATHING_EXT)
 
     # --- водовоздухозащитный слой (ветрозащита) ---
     if on["windproof"] and ext:
@@ -273,7 +305,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              f"полиэтилен), 9.3.2.10: паропроницаемость 0,61…5,0 мг/(Па·ч·м²). "
              f"9.3.3.2: стыки герметично или внахлёст ≥100 мм, крепить скобками "
              f"к каркасу или обрешётке. В модели показан условной толщиной 2 мм",
-             wrap=True)
+             wrap=True, roll=True, col=G_WINDPROOF)
 
     # --- утеплитель в пустотах каркаса ---
     if on["wall_insulation"] if ext else on["interior_insulation"]:
@@ -318,7 +350,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         slab("vapour", "Пароизоляция (плёнка ≥0,15 мм)", 2, depth, (z_bot + z_top) / 2, H,
              "9.3.2.2: полиэтиленовая плёнка ≥0,15 мм с тёплой стороны утеплителя; "
              "в модели показана условной толщиной 2 мм",
-             inset=_corner_clear)
+             inset=_corner_clear, roll=True, col=G_VAPOUR)
 
     # --- внутренняя обшивка ---
     if on["wall_sheathing_int"]:
@@ -328,11 +360,11 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              (z_bot + z_top) / 2, H,
              f"табл. 7-3: ГКЛ/ГВЛ ≥{th:g} мм при шаге стоек {sp} мм; "
              f"винты с шагом ≤300 мм (табл. 7-4), края листов над опорами (7.3.5.3)",
-             inset=_corner_clear, sheet=True)
+             inset=_corner_clear, sheet=True, col=G_SHEATHING_INT)
         if not ext:
             slab("sheathing_int", f"Внутренняя обшивка ГКЛ {th:g} мм", th, -th * MM,
                  (z_bot + z_top) / 2, H, "7.3.1: перегородки обшиваются с обеих сторон",
-                 sheet=True)
+                 sheet=True, col=G_SHEATHING_INT)
 
     # --- облицовка по обрешётке с вентзазором ---
     if on["cladding"] and ext:
@@ -343,13 +375,14 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
             c = -(base + gap / 2)
             p1 = (o[0] + d[0] * u - n[0] * c, o[1] + d[1] * u - n[1] * c, z0)
             p2 = (o[0] + d[0] * u - n[0] * c, o[1] + d[1] * u - n[1] * c, z1)
-            add(Member("batten", f"Обрешётка {bt}x{bh}", (bh, bt), p1, p2, d, group,
+            add(Member("batten", f"Обрешётка {bt}x{bh}", (bh, bt), p1, p2, d, G_CLADDING,
                        "10.4.4.3: обрешётка ≥19x38 мм по каркасу; при креплении прямо к стойкам "
                        "≥19x65 мм при шаге 400 и ≥19x89 мм при шаге 600 (10.4.4.4)"))
         slab("cladding", "Облицовка 20 мм", 20, -(base + gap + 0.020),
              (z_bot + z_top) / 2, H,
              "10.3.2.2: зазор между облицовкой и обшивкой ≥25 мм, рекомендуется 38 мм; "
-             "низ деревянной облицовки ≥250 мм над планировкой (5.4.7)", wrap=True)
+             "низ деревянной облицовки ≥250 мм над планировкой (5.4.7)", wrap=True,
+             col=G_CLADDING)
 
 
 def platform_layers(res, spec: dict, on: dict, plat: dict, group: str,

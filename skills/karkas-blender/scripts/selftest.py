@@ -299,6 +299,24 @@ true(not _over, f"обшивки и плёнки перекрывают проё
 true(sum(1 for m in _sh.members if m.kind == "sheathing_ext") > 1,
      "наружная обшивка должна резаться по проёму на несколько кусков")
 
+# каждый слой оболочки — в своей коллекции, иначе его не выключить
+_col = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                    "layers": "all"})
+for _k, _g in (("sheathing_ext", "13_Обшивка_наружная"), ("windproof", "14_Ветрозащита"),
+               ("vapour", "15_Пароизоляция"), ("sheathing_int", "16_Обшивка_внутренняя"),
+               ("cladding", "17_Облицовка"), ("batten", "17_Облицовка")):
+    _gs = {m.group for m in _col.members if m.kind == _k}
+    eq(_gs, {_g}, f"слой {_k} должен лежать в {_g}")
+
+# плёнки — полотнищами с нахлёстом ≥100 мм (9.3.3.2), а не одним куском
+_wp = [m for m in _col.members if m.kind == "windproof"
+       and abs(m.p1[1] - m.p2[1]) < 1e-6 and m.p1[1] < 0.3]
+_bands = sorted({round(m.p1[2] - m.section[1] / 2000.0, 3) for m in _wp})
+true(len(_bands) > 1, "ветрозащита построена одним полотном, без полотнищ")
+_tops = sorted({round(m.p1[2] + m.section[1] / 2000.0, 3) for m in _wp})
+true(any(_tops[i] - _bands[i + 1] >= 0.1 - 1e-6 for i in range(len(_bands) - 1)),
+     f"нахлёст полотнищ меньше 100 мм (9.3.3.2): низы {_bands}, верхи {_tops}")
+
 # раскрой обшивок на листы: размер, стыки на стойках, ряды вразбежку
 _sht = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
                     "layers": {"wall_sheathing_ext": True}})
