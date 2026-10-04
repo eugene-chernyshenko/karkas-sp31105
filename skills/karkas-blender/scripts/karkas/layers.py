@@ -49,6 +49,8 @@ SHEET_MM = (1200, 2400)
 # Как кладут лист: "h" — длинной стороной горизонтально (так кладут обычно),
 # "v" — вертикально.
 SHEET_LAY = "h"
+# Кусок обшивки короче этого не выделяют в отдельный лист, м.
+MIN_PIECE = 0.30
 
 # Рулон плёнки: ширина и нахлёст, мм. 9.3.3.2 требует нахлёста ≥100 мм; полотнища
 # кладут горизонтально, верхнее поверх нижнего.
@@ -120,6 +122,38 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
             cur = max(cur, p2)
         if z1 - cur > 0.01:
             out.append((a, b, cur, z1))
+    return out
+
+
+def _cols(u_start: float, u_end: float, sw: float, axes, first: float = 1.0) -> list[float]:
+    """Границы листов вдоль стены: шаг не больше листа, граница — на стойке.
+
+    7.3.5.3 требует, чтобы края листов лежали над опорами, поэтому лист не
+    обрезается по сетке, а доводится до ближайшей стойки в пределах своей длины.
+    first — доля листа для первого шага (пол-листа в рядах вразбежку).
+    """
+    ax = sorted(a for a in axes if u_start + 1e-6 < a < u_end - 1e-6)
+    out, cur, k = [u_start], u_start, first
+    while cur < u_end - 1e-6:
+        reach = cur + sw * k
+        k = 1.0
+        hit = [a for a in ax if cur + 1e-6 < a <= reach + 1e-9]
+        nxt = hit[-1] if hit else min(reach, u_end)
+        if nxt <= cur + 1e-6:
+            break
+        cur = min(nxt, u_end)
+        out.append(cur)
+    if out[-1] < u_end - 1e-6:
+        out.append(u_end)
+    # Огрызок уже целого листа не режут: если кусок уходит в мелочь, границу
+    # убирают, а соседний лист доводят до края — лишь бы не длиннее листа.
+    i = 1
+    while i < len(out) - 1:
+        if min(out[i] - out[i - 1], out[i + 1] - out[i]) < MIN_PIECE \
+                and out[i + 1] - out[i - 1] <= sw + 1e-9:
+            del out[i]
+        else:
+            i += 1
     return out
 
 
@@ -257,6 +291,43 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
         lap = (depth - offset) if (wrap and ext and not ext_through and offset < 0) else 0.0
         u_a, u_b = inset - lap, (length or L) - inset + lap
         rects = _face_rects(u_a, u_b, zc - h / 2, zc + h / 2, _holes)
+        if sheet and _sw > 0 and _sh > 0:
+            import math
+            z_lo, z_hi = zc - h / 2, zc + h / 2
+            nrow = max(1, math.ceil((z_hi - z_lo) / _sh - 1e-9))
+            bands = {}
+            for ra, rb, rz1, rz2 in rects:
+                for k in range(nrow):
+                    ba = z_lo + k * _sh
+                    bb = min(z_lo + (k + 1) * _sh, z_hi)
+                    ca, cb = max(rz1, ba), min(rz2, bb)
+                    if cb - ca <= 1e-6:
+                        continue
+                    edges = _cols(ra, rb, _sw, wall["stud_axes"],
+                                  0.5 if k % 2 else 1.0)
+                    for p, q in zip(edges, edges[1:]):
+                        xa, xb = max(ra, p), min(rb, q)
+                        if xb - xa > 1e-6:
+                            bands.setdefault((round(ca, 6), round(cb, 6)), []).append([xa, xb])
+            out = []
+            for (ca, cb), band in bands.items():
+                # Склейка по всему ряду, а не внутри полосы между проёмами:
+                # край проёма режет лист не по стойке, и огрызок надо приклеить
+                # к соседнему куску, даже если тот лежит за этой границей.
+                band.sort()
+                i = 1
+                while i < len(band):
+                    a0, b0 = band[i - 1]
+                    a1, b1 = band[i]
+                    if abs(a1 - b0) < 1e-6 \
+                            and min(b0 - a0, b1 - a1) < MIN_PIECE \
+                            and b1 - a0 <= _sw + 1e-9:
+                        band[i - 1][1] = b1
+                        del band[i]
+                    else:
+                        i += 1
+                out += [(xa, xb, ca, cb) for xa, xb in band]
+            rects = out
         if roll and _rw > 0:
             z_lo, z_hi = zc - h / 2, zc + h / 2
             step = _rw - _rlap
@@ -272,9 +343,7 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
                     if cb - ca > 1e-6:
                         out.append((ra, rb, ca, cb, bi))
             rects = out
-        elif sheet and _sw > 0 and _sh > 0:
-            rects = [r for rect in rects
-                     for r in _sheets(rect, _sw, _sh, 0.0, zc - h / 2, _sw / 2)]
+
         for rect in rects:
             ra, rb, rz1, rz2 = rect[:4]
             # полотнище кладётся поверх нижнего, поэтому каждое следующее на 0,2 мм

@@ -323,6 +323,8 @@ _sht = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
 _ss = [m for m in _sht.members if m.kind == "sheathing_ext"
        and abs(m.p1[1] - m.p2[1]) < 1e-6 and m.p1[1] < 0.3]
 true(len(_ss) > 8, f"обшивка не раскроена на листы: кусков {len(_ss)}")
+true(all(m.length >= 0.3 - 1e-6 for m in _ss),
+     f"есть огрызок обшивки уже 300 мм: {min(m.length for m in _ss):.3f} м")
 true(all(m.length <= 2.4 + 1e-6 for m in _ss),
      f"кусок шире листа 2400 мм: {max(m.length for m in _ss):.3f} м")
 true(all(m.section[1] <= 1200 + 1 for m in _ss),
@@ -346,6 +348,16 @@ true(any(f[0] == "WARN" and "обшивки/раскрой" in f[1] for f in _ba
      "лист 1250 мм при шаге 600 не кратен — нет ! по 7.3.5.3")
 true(not any(r["material"] == "лист" for r in bom(_sht.members, "пиломатериал")),
      "листовые материалы попали в ведомость пиломатериалов")
+
+_real = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
+                     "layers": {"wall_sheathing_ext": True},
+                     "openings": [{"wall": "S", "u": 0.8, "width": 1.5, "height": 1.5,
+                                   "sill": 0.8, "type": "window"},
+                                  {"wall": "W", "u": 0.8, "width": 1.2, "height": 1.5,
+                                   "sill": 0.8, "type": "window"}]})
+_rs = [m for m in _real.members if m.kind == "sheathing_ext"]
+_tiny = [(m.label, round(m.length, 3)) for m in _rs if m.length < 0.3]
+true(not _tiny, f"огрызки обшивки у проёмов и углов: {_tiny[:4]}")
 
 # наружные слои должны заворачиваться на угол (9.3.1.4 — непрерывность)
 _cor = build_house({"plan": {"length": 6.0, "width": 6.0}, "ext_stud": "38x140",
