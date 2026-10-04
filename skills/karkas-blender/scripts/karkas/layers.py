@@ -19,6 +19,7 @@ LAYER_DEFAULTS = {
     "wall_sheathing_ext": False,   # наружная защитная обшивка каркаса (7.3.2, 10.4.4.2)
     "wall_sheathing_int": False,   # внутренняя обшивка ГКЛ/ГВЛ (7.3.1, табл. 7-3)
     "wall_insulation": False,      # утеплитель между стойками (9.2.2.2 «а»)
+    "interior_insulation": False,  # заполнение внутренних стен — звукоизоляция (7.5.2)
     "vapour_barrier": False,       # пароизоляция с тёплой стороны (9.3.1)
     "cladding": False,             # облицовка по обрешётке с вентзазором (10.4.4)
     "ceiling": False,              # подшивка потолка (6.5, табл. 7-3)
@@ -28,6 +29,10 @@ LAYER_DEFAULTS = {
 
 # Толщина утеплителя по умолчанию, мм — НЕ норматив, требует теплотехнического расчёта
 DEFAULT_ATTIC_INSULATION_MM = 250
+
+# Высота одной плиты утеплителя, мм. Ходовой размер минплиты — 1000x600 при шаге
+# стоек 600; СП размеры плит не нормирует. 0 — не резать, заполнять ячейку целиком.
+DEFAULT_PLATE_MM = 1000
 
 # Утеплитель — в своём слое, а не в слое стены/крыши: иначе выключатель крыши
 # прячет и утеплитель чердачного перекрытия, а посмотреть на один утеплитель
@@ -83,6 +88,21 @@ def _cavities(wall: dict) -> list[tuple[float, float, float, float]]:
     return out
 
 
+def _plates(a: float, b: float, step: float) -> list[tuple[float, float]]:
+    """Делит ячейку по высоте на плиты step метров, снизу вверх.
+
+    Остаток ниже 100 мм не плодит обрезок, а добавляется к последней плите.
+    """
+    if step <= 0 or b - a <= step + 0.1:
+        return [(a, b)]
+    out, z = [], a
+    while b - z > step + 0.1:
+        out.append((z, z + step))
+        z += step
+    out.append((z, b))
+    return out
+
+
 def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
     """Слои одной стены. wall — то, что вернул frame_wall()."""
     o, d, n = wall["origin"], wall["d"], wall["n"]
@@ -122,17 +142,27 @@ def wall_layers(res, wall: dict, on: dict, spec: dict, group: str) -> None:
              f"≥9,5 мм также требуется для применения табл. Б-13 к перемычкам")
 
     # --- утеплитель в пустотах каркаса ---
-    if on["wall_insulation"] and ext:
+    if on["wall_insulation"] if ext else on["interior_insulation"]:
+        lay = spec.get("layers")
+        plate = (float(lay.get("insulation_plate_mm", DEFAULT_PLATE_MM))
+                 if isinstance(lay, dict) else DEFAULT_PLATE_MM) * MM
+        label = (f"Утеплитель {int(depth * 1000)} мм" if ext
+                 else f"Звукоизоляция {int(depth * 1000)} мм")
+        note = ("9.2.2.2 «а»: в пространстве между стойками, обвязками и обшивками; "
+                "λ ≤0,10 Вт/(м·°C) (9.2.2.1). Толщина = глубине каркаса, "
+                "достаточность проверяется теплотехническим расчётом (9.2.1.2)" if ext else
+                "7.5.2: звукоизоляция стен и перегородок внутри дома — по заданию на "
+                "проектирование. Само заполнение ячеек СП не нормирует: табл. 7-6 даёт "
+                "прибавку Iв только для обшивок и крепления к гибким профилям")
         for u1, u2, a, b in _cavities(wall):
-            zc, h = (a + b) / 2, b - a
-            c = depth / 2
-            p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
-            p2 = (o[0] + d[0] * u2 - n[0] * c, o[1] + d[1] * u2 - n[1] * c, zc)
-            add(Member("insulation", f"Утеплитель {int(depth * 1000)} мм", 
-                       (int(depth * 1000), int(round(h * 1000))), p1, p2, n, G_INSULATION,
-                       "9.2.2.2 «а»: в пространстве между стойками, обвязками и обшивками; "
-                       "λ ≤0,10 Вт/(м·°C) (9.2.2.1). Толщина = глубине каркаса, "
-                       "достаточность проверяется теплотехническим расчётом (9.2.1.2)"))
+            for z1, z2 in _plates(a, b, plate):
+                zc, h = (z1 + z2) / 2, z2 - z1
+                c = depth / 2
+                p1 = (o[0] + d[0] * u1 - n[0] * c, o[1] + d[1] * u1 - n[1] * c, zc)
+                p2 = (o[0] + d[0] * u2 - n[0] * c, o[1] + d[1] * u2 - n[1] * c, zc)
+                add(Member("insulation", label,
+                           (int(depth * 1000), int(round(h * 1000))), p1, p2, n,
+                           G_INSULATION, note))
 
     # --- пароизоляция с тёплой стороны ---
     if on["vapour_barrier"] and ext:
